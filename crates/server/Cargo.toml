@@ -1,0 +1,16 @@
+[package]
+name = "mcdash"
+version = "0.2.0"
+edition = "2021"
+description = "Server dashboard TPO: feed (TradingView / MetaTrader 5) -> mesin TPO (Rust) -> web (TS) + Telegram"
+
+[dependencies]
+mcdash-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "sync", "io-util", "signal"] }
+axum = { version = "0.7", features = ["ws"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+ureq = { version = "2", features = ["json"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

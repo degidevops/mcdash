@@ -1,0 +1,4 @@
+# ts-rs: tipe TypeScript untuk klien web digenerate dari struct Rust (cargo test -> web/src/gen/*.ts)
+[env]
+TS_RS_EXPORT_DIR = { value = "web/src/gen", relative = true }
+TS_RS_LARGE_INT = "number"   # i64 dikirim sebagai angka JSON biasa, bukan bigint

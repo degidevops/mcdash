@@ -1,0 +1,16 @@
+{
+  "_help": "Salin file ini jadi telegram.json. token dari @BotFather; chat_id = id chat/grup tujuan (grup biasanya negatif). Bisa juga lewat env TG_TOKEN dan TG_CHAT_ID. Jangan dibagikan.",
+  "token": "ISI_TOKEN_BOT",
+  "chat_id": "ISI_CHAT_ID",
+
+  "enabled": true,
+  "on_change": true,
+  "watch": ["base", "close"],
+  "on_new_period": ["W", "D", "S"],
+  "confirm_sec": 20,
+  "min_interval_sec": 300,
+  "send_on_start": false,
+  "profiles": ["W", "D", "S", "M"],
+  "level_atr": 3,
+  "max_naked": 4
+}

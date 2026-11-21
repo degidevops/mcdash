@@ -1,0 +1,21 @@
+{
+  "name": "mcdash-web",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "description": "Klien web dashboard TPO (TypeScript). Di-compile ke dist/*.js (ES module) lalu disajikan server Rust. Compiler: tsc (bawaan) atau tsrs (opsional).",
+  "scripts": {
+    "build": "tsc -p . && node -e \"require('fs').copyFileSync('index.html','dist/index.html')\"",
+    "watch": "tsc -p . --watch",
+    "typecheck": "tsc -p . --noEmit",
+    "build:tsrs": "tsrs -p . && node -e \"require('fs').copyFileSync('index.html','dist/index.html')\"",
+    "watch:tsrs": "tsrs -p . --watch",
+    "typecheck:tsrs": "tsrs -p . --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "optionalDependencies": {
+    "tsrs": "^0.25.0-ts7.1.0-beta"
+  }
+}
