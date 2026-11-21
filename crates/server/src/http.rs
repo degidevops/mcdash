@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use mcdash_core::config;
+use mcdash_core::series::{Bar, Bars};
 use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -79,14 +80,46 @@ struct ChartQuery {
     count: Option<usize>,
 }
 
+/// Agregasi bar dari timeframe lebih kecil ke timeframe lebih besar (dalam detik).
+pub fn aggregate_bars(base: &Bars, target_tf_sec: i64) -> Bars {
+    let mut out = Bars::new();
+    if target_tf_sec <= 0 {
+        return out;
+    }
+    for (&ts, &bar) in base {
+        let bucket = ts - (ts % target_tf_sec);
+        out.entry(bucket)
+            .and_modify(|b: &mut Bar| {
+                b.h = b.h.max(bar.h);
+                b.l = b.l.min(bar.l);
+                b.c = bar.c;
+                b.v += bar.v;
+            })
+            .or_insert(bar);
+    }
+    out
+}
+
 /// GET /api/chart-bars?tf=60&count=500 → [[ts,o,h,l,c,v], ...]
 async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::extract::Query<ChartQuery>) -> Response {
     let tf = q.tf.unwrap_or(60);
     let count = q.count.unwrap_or(500);
     let sh = app.shared.read().unwrap();
-    let bars = match sh.chart_bars.get(&tf) {
-        Some(b) => b,
-        None => return json_resp(StatusCode::OK, "[]".into()),
+    let maybe_bars = sh.chart_bars.get(&tf).cloned();
+    let bars = match maybe_bars {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            // Coba agregasi dari timeframe dasar lebih kecil yang ada
+            let base_candidate = [1, 5, 15, 60, 240]
+                .into_iter()
+                .find(|&btf| btf < tf && sh.chart_bars.get(&btf).map_or(false, |b| !b.is_empty()));
+            if let Some(btf) = base_candidate {
+                let base_bars = sh.chart_bars.get(&btf).unwrap();
+                aggregate_bars(base_bars, tf * 60)
+            } else {
+                return json_resp(StatusCode::OK, "[]".into());
+            }
+        }
     };
     // Take the last `count` bars, output as array of arrays
     let total = bars.len();
@@ -199,5 +232,24 @@ mod tests {
             notifier: crate::notifier::Notifier::new(PathBuf::from("telegram.json")),
         });
         let _ = router(app);
+    }
+
+    #[test]
+    fn aggregate_bars_combines_ohlcv_correctly() {
+        let mut base = Bars::new();
+        // 3 bar 1-menit: menit 0, 1, 2 (ts: 0, 60, 120)
+        base.insert(0, Bar { o: 100.0, h: 105.0, l: 99.0, c: 102.0, v: 10.0 });
+        base.insert(60, Bar { o: 102.0, h: 108.0, l: 101.0, c: 107.0, v: 15.0 });
+        base.insert(120, Bar { o: 107.0, h: 107.5, l: 95.0, c: 98.0, v: 25.0 });
+
+        // Agregasi ke interval 300 detik (5m)
+        let agg = aggregate_bars(&base, 300);
+        assert_eq!(agg.len(), 1);
+        let b = agg.get(&0).expect("bucket 0 exists");
+        assert_eq!(b.o, 100.0, "open should be first bar open");
+        assert_eq!(b.h, 108.0, "high should be max of all bars");
+        assert_eq!(b.l, 95.0, "low should be min of all bars");
+        assert_eq!(b.c, 98.0, "close should be last bar close");
+        assert_eq!(b.v, 50.0, "volume should be sum of all bars");
     }
 }

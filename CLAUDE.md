@@ -106,8 +106,8 @@ mcdash/
 
 **Fase implementasi**:
 1. **Phase 1**: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
-2. **Phase 2**: Crosshair + Multi-TF + Info Box ← **MULAI DI SINI**
-3. Phase 3: TPO Overlay + Level Lines
+2. **Phase 2**: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
+3. Phase 3: TPO Overlay + Level Lines ← **SELANJUTNYA**
 4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect)
 5. Phase 5: Polish (mobile, shortcuts, export)
 

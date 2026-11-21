@@ -57,8 +57,13 @@ body{background:var(--bg);color:var(--tx);font:12px/1.4 var(--mono);font-variant
 .x-row{display:flex}.x-row .x-axis{flex:1}.x-row .x-pad{width:72px;background:var(--bg2);border-left:1px solid var(--bd);border-top:1px solid var(--bd)}
 
 /* info box */
-.info{position:absolute;top:4px;left:8px;z-index:5;font-size:11px;color:var(--mu);pointer-events:none;display:flex;gap:12px}
+.info{position:absolute;top:4px;left:8px;z-index:5;font-size:11px;color:var(--mu);pointer-events:none;display:flex;flex-wrap:wrap;gap:10px;background:rgba(19,23,34,0.7);padding:2px 8px;border-radius:3px}
 .info b{font-weight:700}.info .iv{color:var(--tx)}.info .up{color:var(--bull)}.info .dn{color:var(--bear)}
+
+/* follow / reset button */
+.btn-follow{position:absolute;bottom:10px;right:10px;z-index:6;background:var(--bg2);border:1px solid var(--bd2);color:var(--mu);padding:4px 9px;border-radius:4px;cursor:pointer;font:600 11px var(--mono);display:flex;align-items:center;gap:4px;opacity:0.85;box-shadow:0 2px 6px rgba(0,0,0,0.4);transition:all .15s}
+.btn-follow:hover{opacity:1;color:var(--tx);border-color:var(--cur);background:var(--pn)}
+.btn-follow.hidden{display:none}
 
 /* status */
 .status{position:absolute;bottom:4px;left:8px;z-index:5;font-size:10px;color:var(--dim);pointer-events:none}
@@ -91,6 +96,7 @@ body{background:var(--bg);color:var(--tx);font:12px/1.4 var(--mono);font-variant
         <canvas id="ovCanvas"></canvas>
         <div class="info" id="info"></div>
         <div class="status" id="status"></div>
+        <button class="btn-follow hidden" id="btnFollow" title="Auto-scroll / Ke Bar Terbaru (Home)">&#9654;&#9654; Live</button>
       </div>
       <div class="y-axis" id="yAxis"><canvas id="yCanvas"></canvas></div>
     </div>

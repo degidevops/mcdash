@@ -6,6 +6,8 @@ export class Viewport {
     xMax = 100; // rightmost bar index
     yMin = 0; // bottom price
     yMax = 100; // top price
+    /** When true, price scale automatically fits the visible bars */
+    autoFitY = true;
     // screen dimensions
     w = 800;
     h = 600;
@@ -25,6 +27,11 @@ export class Viewport {
         const rng = hi - lo || 1;
         this.yMin = lo - rng * pad;
         this.yMax = hi + rng * pad;
+    }
+    /** Reset Y back to auto-fit */
+    resetY(lo, hi, pad = 0.05) {
+        this.autoFitY = true;
+        this.fitY(lo, hi, pad);
     }
     // ---- World → Screen ----
     xToScreen(barIdx) {

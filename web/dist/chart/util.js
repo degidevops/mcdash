@@ -26,13 +26,25 @@ export function fmtTime(ts, tf) {
     }
     return `${hh}:${mm}`;
 }
-export function fmtDate(ts) {
+export function fmtDate(ts, tf = 0) {
     const d = new Date(ts * 1000);
     const mo = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
+    if (tf >= 1440) {
+        const yr = d.getFullYear();
+        return `${yr}-${mo}-${dd}`;
+    }
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     return `${mo}/${dd} ${hh}:${mm}`;
+}
+export function fmtChg(diff, dec) {
+    const sign = diff >= 0 ? '+' : '';
+    return `${sign}${diff.toFixed(dec)}`;
+}
+export function fmtPct(pct) {
+    const sign = pct >= 0 ? '+' : '';
+    return `${sign}${pct.toFixed(2)}%`;
 }
 /** Nice price grid step */
 export function niceStep(range, maxTicks) {

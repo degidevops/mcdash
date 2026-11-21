@@ -9,6 +9,7 @@ import { AxisRenderer } from './axis.js';
 import { CrosshairRenderer } from './crosshair.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
+import { fmtPrice, fmtPct, decimalsOf } from './util.js';
 export class ChartApp {
     glCanvas;
     ovCanvas;
@@ -22,6 +23,7 @@ export class ChartApp {
     dotEl;
     pxEl;
     chgEl;
+    btnFollowEl;
     glCtx;
     vp = new Viewport();
     bars = new BarBuffer();
@@ -51,6 +53,7 @@ export class ChartApp {
         this.dotEl = document.getElementById('dot');
         this.pxEl = document.getElementById('px');
         this.chgEl = document.getElementById('chg');
+        this.btnFollowEl = document.getElementById('btnFollow');
         // WebGL context first
         this.glCtx = initGL(this.glCanvas);
         // Size canvases (after glCtx is ready)
@@ -58,8 +61,12 @@ export class ChartApp {
         window.addEventListener('resize', () => { this.resize(); this.markDirty(); });
         // Client
         this.client = new ChartClient((bars) => { this.bars.load(bars); this.fitAndRender(); }, (price) => { this.bars.updateLast(price); this.updatePrice(price); this.markDirty(); }, (connected) => { this.dotEl.className = connected ? 'ok' : ''; });
-        // PanZoom
-        this.panzoom = new PanZoom(document.getElementById('chartMain'), this.vp, () => this.markDirty(), (x, y) => { this.crosshair.update(x, y); this.markDirty(); }, () => { this.crosshair.hide(); this.markDirty(); });
+        // PanZoom with Y-axis drag support
+        this.panzoom = new PanZoom(document.getElementById('chartMain'), document.getElementById('yAxis'), this.vp, () => this.markDirty(), (x, y) => { this.crosshair.update(x, y); this.markDirty(); }, () => { this.crosshair.hide(); this.markDirty(); }, (follow) => this.updateAutoFollowBtn(follow));
+        // Reset view / auto-follow button
+        if (this.btnFollowEl) {
+            this.btnFollowEl.addEventListener('click', () => this.resetToLive());
+        }
         // TF buttons
         document.getElementById('tf').addEventListener('click', (e) => {
             const btn = e.target.closest('button');
@@ -68,6 +75,8 @@ export class ChartApp {
             const tf = parseInt(btn.dataset['tf'] || '60');
             this.switchTf(tf);
         });
+        // Keyboard shortcuts
+        this.bindKeyboard();
         // Start render loop immediately
         this.renderLoop();
         // Connect WebSocket for live ticks
@@ -99,6 +108,74 @@ export class ChartApp {
         };
         await loadData();
     }
+    bindKeyboard() {
+        window.addEventListener('keydown', (e) => {
+            if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName))
+                return;
+            switch (e.key) {
+                case '1':
+                    this.switchTf(1);
+                    break;
+                case '2':
+                    this.switchTf(5);
+                    break;
+                case '3':
+                    this.switchTf(15);
+                    break;
+                case '4':
+                    this.switchTf(60);
+                    break;
+                case '5':
+                    this.switchTf(240);
+                    break;
+                case '6':
+                    this.switchTf(1440);
+                    break;
+                case 'Home':
+                    this.resetToLive();
+                    break;
+                case '+':
+                case '=':
+                    this.vp.zoom(1 / 1.15, this.vp.w / 2);
+                    this.panzoom.setAutoFollow(false);
+                    this.markDirty();
+                    break;
+                case '-':
+                case '_':
+                    this.vp.zoom(1.15, this.vp.w / 2);
+                    this.panzoom.setAutoFollow(false);
+                    this.markDirty();
+                    break;
+                case 'ArrowLeft':
+                    this.vp.pan(50, 0);
+                    this.panzoom.setAutoFollow(false);
+                    this.markDirty();
+                    break;
+                case 'ArrowRight':
+                    this.vp.pan(-50, 0);
+                    this.panzoom.setAutoFollow(false);
+                    this.markDirty();
+                    break;
+            }
+        });
+    }
+    resetToLive() {
+        if (this.bars.len === 0)
+            return;
+        this.vp.autoFitY = true;
+        this.vp.scrollToEnd(this.bars.len);
+        const [lo, hi] = this.bars.priceRange(Math.max(0, this.vp.xMin), this.vp.xMax);
+        if (lo < Infinity)
+            this.vp.fitY(lo, hi);
+        this.panzoom.setAutoFollow(true);
+        this.updateAutoFollowBtn(true);
+        this.markDirty();
+    }
+    updateAutoFollowBtn(follow) {
+        if (this.btnFollowEl) {
+            this.btnFollowEl.classList.toggle('hidden', follow);
+        }
+    }
     resize() {
         const main = document.getElementById('chartMain');
         const dpr = window.devicePixelRatio || 1;
@@ -127,7 +204,9 @@ export class ChartApp {
         const show = Math.min(this.bars.len, 120);
         this.vp.xMin = this.bars.len - show;
         this.vp.xMax = this.bars.len + 5;
-        this.panzoom.autoFollow = true;
+        this.vp.autoFitY = true;
+        this.panzoom.setAutoFollow(true);
+        this.updateAutoFollowBtn(true);
         // Fit Y to visible data
         const [lo, hi] = this.bars.priceRange(this.vp.xMin, this.vp.xMax);
         this.vp.fitY(lo, hi);
@@ -156,14 +235,24 @@ export class ChartApp {
         }
     }
     updatePrice(price) {
-        const bull = price >= this.openPrice;
-        this.pxEl.textContent = price.toFixed(2);
-        this.pxEl.className = 'px ' + (bull ? 'up' : 'dn');
+        const dec = decimalsOf(this.tickSize);
+        this.pxEl.textContent = fmtPrice(price, dec);
+        if (this.openPrice > 0) {
+            const diff = price - this.openPrice;
+            const pct = (diff / this.openPrice) * 100;
+            const bull = diff >= 0;
+            this.pxEl.className = 'px ' + (bull ? 'up' : 'dn');
+            this.chgEl.textContent = `${bull ? '▲ +' : '▼ '}${Math.abs(diff).toFixed(dec)} (${fmtPct(pct)})`;
+            this.chgEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
+        }
         // auto-follow
         if (this.panzoom.autoFollow) {
             this.vp.scrollToEnd(this.bars.len);
-            const [lo, hi] = this.bars.priceRange(Math.max(0, this.vp.xMin), this.vp.xMax);
-            this.vp.fitY(lo, hi);
+            if (this.vp.autoFitY) {
+                const [lo, hi] = this.bars.priceRange(Math.max(0, this.vp.xMin), this.vp.xMax);
+                if (lo < Infinity)
+                    this.vp.fitY(lo, hi);
+            }
         }
     }
     renderLoop = () => {
@@ -181,10 +270,12 @@ export class ChartApp {
         gl.clear(gl.COLOR_BUFFER_BIT);
         if (bars.len === 0)
             return;
-        // Fit Y when scrolling/zooming X (auto Y-fit)
-        const [lo, hi] = bars.priceRange(vp.xMin, vp.xMax);
-        if (lo < Infinity)
-            vp.fitY(lo, hi);
+        // Fit Y when scrolling/zooming X (only if autoFitY is active)
+        if (vp.autoFitY) {
+            const [lo, hi] = bars.priceRange(Math.max(0, vp.xMin), vp.xMax);
+            if (lo < Infinity)
+                vp.fitY(lo, hi);
+        }
         const view = vp.clipView();
         // Draw candles
         candles.rebuild(bars, vp);
@@ -197,7 +288,7 @@ export class ChartApp {
         grid.draw(this.ovCtx, vp, this.tf);
         // Draw crosshair on overlay
         crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);
-        crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize);
+        crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize, this.tf);
         // Draw axes
         axis.drawY(this.yCtx, vp, this.tickSize, bars.lastPrice(), this.openPrice);
         axis.drawX(this.xCtx, vp, bars, this.tf);

@@ -37,12 +37,21 @@ export class AxisRenderer {
       const bg = bull ? BULL_COLOR : BEAR_COLOR;
 
       ctx.fillStyle = bg;
-      ctx.fillRect(0, y - 10, w, 20);
+      ctx.beginPath();
+      const h2 = 10;
+      ctx.moveTo(0, y);
+      ctx.lineTo(5, y - h2);
+      ctx.lineTo(w, y - h2);
+      ctx.lineTo(w, y + h2);
+      ctx.lineTo(5, y + h2);
+      ctx.closePath();
+      ctx.fill();
+
       ctx.fillStyle = '#fff';
       ctx.font = 'bold 11px ui-monospace,SFMono-Regular,monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(fmtPrice(lastPrice, dec), w / 2, y);
+      ctx.fillText(fmtPrice(lastPrice, dec), (w + 4) / 2, y);
     }
   }
 

@@ -30,13 +30,27 @@ export function fmtTime(ts: number, tf: number): string {
   return `${hh}:${mm}`;
 }
 
-export function fmtDate(ts: number): string {
+export function fmtDate(ts: number, tf = 0): string {
   const d = new Date(ts * 1000);
   const mo = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
+  if (tf >= 1440) {
+    const yr = d.getFullYear();
+    return `${yr}-${mo}-${dd}`;
+  }
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${mo}/${dd} ${hh}:${mm}`;
+}
+
+export function fmtChg(diff: number, dec: number): string {
+  const sign = diff >= 0 ? '+' : '';
+  return `${sign}${diff.toFixed(dec)}`;
+}
+
+export function fmtPct(pct: number): string {
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(2)}%`;
 }
 
 /** Nice price grid step */
