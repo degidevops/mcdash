@@ -73,7 +73,7 @@ mcdash/
 - **Bahasa respons**: Selalu dalam Bahasa Indonesia
 - **Sandbox**: Semua command harus pakai `BypassSandbox: true` (Termux ARM64 glibc issue)
 - **Build**: `cargo build --release --bin mcdash`
-- **Test**: `cargo test --release` (73 tests: 53 core + 11 server + 8 golden + 1 ts-parity)
+- **Test**: `cargo test --release` (74 tests: 53 core + 12 server + 8 golden + 1 ts-parity)
 - **File links**: Selalu gunakan `file://` markdown links
 - **Git**: Credential helper `store` sudah dikonfigurasi (`~/.git-credentials`)
 

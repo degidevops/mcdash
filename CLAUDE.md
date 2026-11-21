@@ -87,7 +87,7 @@ mcdash/
 ### ✅ SELESAI: M1 — TPO Calculation Alignment
 - POC/VAH/VAL calculation aligned dengan ATAS & Sierra Chart
 - Mode: `PocRule::Atas`, `VaBound::Center`, `VaTieBreak::Cbot`, `VaStop::Floor`
-- 73 tests passing
+- 74 tests passing
 
 ### ✅ SELESAI: M2 — Git + GitHub Push
 - Branch `main`, pushed ke origin

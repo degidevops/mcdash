@@ -8,7 +8,7 @@ Lihat `CLAUDE.md` untuk arsitektur, milestone, dan keputusan teknis.
 ## Quick Start
 
 ```bash
-cargo test --release          # 73 tests harus passing
+cargo test --release          # 74 tests harus passing
 cargo build --release --bin mcdash
 ```
 
