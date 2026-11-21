@@ -44,12 +44,12 @@ body{background:var(--bg);color:var(--tx);font:12px/1.4 var(--mono);font-variant
 #ovCanvas{z-index:2;pointer-events:none}
 
 /* y-axis */
-.y-axis{width:72px;background:var(--bg2);border-left:1px solid var(--bd);position:relative;flex-shrink:0}
+.y-axis{width:72px;background:var(--bg2);border-left:1px solid var(--bd);position:relative;flex-shrink:0;cursor:ns-resize}
 .y-axis canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 
 /* x-axis */
-.x-axis{height:22px;background:var(--bg2);border-top:1px solid var(--bd);flex-shrink:0}
-.x-axis canvas{width:100%;height:100%}
+.x-axis{height:24px;background:var(--bg2);border-top:1px solid var(--bd);position:relative;flex-shrink:0;cursor:ew-resize;overflow:hidden}
+.x-axis canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 
 /* layout */
 .chart-body{display:flex;flex-direction:column;height:100vh}
@@ -136,7 +136,7 @@ body{background:var(--bg);color:var(--tx);font:12px/1.4 var(--mono);font-variant
     </div>
     <div class="x-row">
       <div class="x-pad-l"></div>
-      <div class="x-axis"><canvas id="xCanvas"></canvas></div>
+      <div class="x-axis" id="xAxis" title="Drag: zoom skala waktu | Double click: reset zoom"><canvas id="xCanvas"></canvas></div>
       <div class="x-pad"></div>
     </div>
   </div>

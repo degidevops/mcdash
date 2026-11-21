@@ -112,16 +112,22 @@ export class ChartApp {
       (tpoData) => { this.tpo.setData(tpoData); this.markDirty(); },
     );
 
-    // PanZoom with Y-axis drag support
+    // PanZoom with X and Y axis drag & zoom support
     this.panzoom = new PanZoom(
       document.getElementById('chartMain')!,
       document.getElementById('yAxis')!,
+      document.getElementById('xAxis')!,
       this.vp,
       () => this.markDirty(),
       (x, y) => { this.crosshair.update(x, y); this.markDirty(); },
       () => { this.crosshair.hide(); this.markDirty(); },
       (follow) => this.updateAutoFollowBtn(follow),
     );
+
+    // Live bar timer tick every second for Y-axis countdown
+    setInterval(() => {
+      if (this.bars.len > 0) this.markDirty();
+    }, 1000);
 
     // Reset view / auto-follow button
     if (this.btnFollowEl) {
@@ -520,9 +526,9 @@ export class ChartApp {
     this.yCanvas.width = (yAxis.clientWidth || 72) * dpr;
     this.yCanvas.height = (yAxis.clientHeight || h) * dpr;
 
-    const xRow = this.xCanvas.parentElement!;
-    this.xCanvas.width = (xRow.clientWidth || w) * dpr;
-    this.xCanvas.height = (xRow.clientHeight || 22) * dpr;
+    const xAxis = document.getElementById('xAxis') || this.xCanvas.parentElement!;
+    this.xCanvas.width = (xAxis.clientWidth || w) * dpr;
+    this.xCanvas.height = (xAxis.clientHeight || 24) * dpr;
 
     this.vp.setSize(w * dpr, h * dpr);
     if (this.glCtx && this.glCtx.gl) {
@@ -637,13 +643,14 @@ export class ChartApp {
     // Draw user drawings
     this.drawingRenderer.draw(this.ovCtx, vp, bars, this.drawingStore);
 
-    // Draw crosshair on overlay
+    // Draw axes first (clears axis canvases)
+    const lastBarTs = bars.len > 0 ? bars.t[bars.len - 1] : 0;
+    axis.drawY(this.yCtx, vp, this.tickSize, bars.lastPrice(), this.openPrice, lastBarTs, this.tf);
+    axis.drawX(this.xCtx, vp, bars, this.tf);
+
+    // Draw crosshair on overlay and price/time badges on axes (on top of axis labels)
     crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);
     crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize, this.tf);
-
-    // Draw axes
-    axis.drawY(this.yCtx, vp, this.tickSize, bars.lastPrice(), this.openPrice);
-    axis.drawX(this.xCtx, vp, bars, this.tf);
 
     // Current price horizontal line on overlay
     const lastP = bars.lastPrice();

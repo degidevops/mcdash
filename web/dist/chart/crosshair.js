@@ -66,31 +66,45 @@ export class CrosshairRenderer {
             yCtx.lineWidth = 1;
             yCtx.strokeRect(0.5, this.my - 9.5, yw - 1, 19);
             yCtx.fillStyle = '#FFFFFF';
-            yCtx.font = '11px ui-monospace,SFMono-Regular,monospace';
+            yCtx.font = 'bold 11px ui-monospace,SFMono-Regular,monospace';
             yCtx.textAlign = 'center';
             yCtx.textBaseline = 'middle';
             yCtx.fillText(label, yw / 2, this.my);
             yCtx.restore();
         }
         // --- X-axis time tag ---
-        if (hasBar) {
-            const ts = bars.t[barIdx];
-            const label = fmtDate(ts, tf);
-            const xh = xCtx.canvas.height;
-            xCtx.save();
-            xCtx.font = '10px ui-monospace,SFMono-Regular,monospace';
-            const tw = xCtx.measureText(label).width + 14;
-            xCtx.fillStyle = BG_TAG;
-            xCtx.fillRect(snapX - tw / 2, 0, tw, xh);
-            xCtx.strokeStyle = BORDER_TAG;
-            xCtx.lineWidth = 1;
-            xCtx.strokeRect(snapX - tw / 2 + 0.5, 0.5, tw - 1, xh - 1);
-            xCtx.fillStyle = '#FFFFFF';
-            xCtx.textAlign = 'center';
-            xCtx.textBaseline = 'middle';
-            xCtx.fillText(label, snapX, xh / 2);
-            xCtx.restore();
+        let ts;
+        if (bars.len > 0) {
+            if (barIdx >= 0 && barIdx < bars.len) {
+                ts = bars.t[barIdx];
+            }
+            else if (barIdx >= bars.len) {
+                ts = bars.t[bars.len - 1] + (barIdx - (bars.len - 1)) * tf * 60;
+            }
+            else {
+                ts = bars.t[0] + barIdx * tf * 60;
+            }
         }
+        else {
+            ts = Math.floor(Date.now() / 1000);
+        }
+        const label = fmtDate(ts, tf);
+        const xh = xCtx.canvas.height;
+        const xw = xCtx.canvas.width;
+        xCtx.save();
+        xCtx.font = '10px ui-monospace,SFMono-Regular,monospace';
+        const tw = xCtx.measureText(label).width + 14;
+        const clampSnapX = Math.max(tw / 2, Math.min(xw - tw / 2, snapX));
+        xCtx.fillStyle = BG_TAG;
+        xCtx.fillRect(clampSnapX - tw / 2, 0, tw, xh);
+        xCtx.strokeStyle = BORDER_TAG;
+        xCtx.lineWidth = 1;
+        xCtx.strokeRect(clampSnapX - tw / 2 + 0.5, 0.5, tw - 1, xh - 1);
+        xCtx.fillStyle = '#FFFFFF';
+        xCtx.textAlign = 'center';
+        xCtx.textBaseline = 'middle';
+        xCtx.fillText(label, clampSnapX, xh / 2);
+        xCtx.restore();
     }
     /** Draw OHLCV info at top-left of the chart (shows hovered bar, or latest bar if crosshair inactive) */
     drawInfo(el, bars, vp, tickSize, tf) {

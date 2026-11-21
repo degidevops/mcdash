@@ -67,12 +67,30 @@ export class Viewport {
         this.xMin = anchorWorld - newRange * ratio;
         this.xMax = anchorWorld + newRange * (1 - ratio);
     }
+    /** Zoom horizontal time scale centered on anchor screen X or viewport center */
+    zoomX(factor, anchorPx) {
+        const px = anchorPx !== undefined ? anchorPx : this.w / 2;
+        this.zoom(factor, px);
+    }
     zoomY(factor, anchorPy) {
         const anchorPrice = this.screenToY(anchorPy);
-        const newRange = (this.yMax - this.yMin) * factor;
-        const ratio = (anchorPrice - this.yMin) / (this.yMax - this.yMin);
+        const currentRange = this.yMax - this.yMin;
+        if (currentRange <= 0)
+            return;
+        const newRange = Math.max(0.0001, currentRange * factor);
+        const ratio = (anchorPrice - this.yMin) / currentRange;
         this.yMin = anchorPrice - newRange * ratio;
         this.yMax = anchorPrice + newRange * (1 - ratio);
+    }
+    /** Zoom vertical price scale smoothly centered at chart mid-price (symmetric, no jump) */
+    zoomYCenter(factor) {
+        const currentRange = this.yMax - this.yMin;
+        if (currentRange <= 0)
+            return;
+        const mid = (this.yMin + this.yMax) / 2;
+        const newRange = Math.max(0.0001, currentRange * factor);
+        this.yMin = mid - newRange / 2;
+        this.yMax = mid + newRange / 2;
     }
     /** Scroll to show latest bars at right edge */
     scrollToEnd(totalBars, margin = 5) {
