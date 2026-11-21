@@ -1,10 +1,11 @@
 // Drawing Tools — Models, Storage, Hit Testing, and Canvas 2D Overlay Rendering
-// Part of Phase 4: Professional Trading Chart (ATAS / DeepChart style)
+// Part of Phase 4 & Phase 5: Professional Trading Chart (ATAS / DeepChart style)
 
 import type { Viewport } from './viewport.js';
 import type { BarBuffer } from './data.js';
+import { fmtDateShort } from './util.js';
 
-export type DrawingType = 'trendline' | 'hline' | 'fibonacci' | 'rectangle';
+export type DrawingType = 'trendline' | 'hline' | 'vline' | 'fibonacci' | 'rectangle';
 
 export interface DrawingPoint {
   time: number;  // unix timestamp in seconds
@@ -20,7 +21,7 @@ export interface DrawingStyle {
 export interface Drawing {
   id: string;
   type: DrawingType;
-  points: DrawingPoint[]; // 1 point for hline, 2 points for trendline/fibonacci/rectangle
+  points: DrawingPoint[]; // 1 point for hline/vline, 2 points for trendline/fibonacci/rectangle
   style: DrawingStyle;
   visible: boolean;
   locked: boolean;
@@ -42,10 +43,6 @@ export const FIB_LEVELS: FibLevel[] = [
   { ratio: 0.786, label: '78.6%', color: '#00BCD4', tint: 'rgba(0, 188, 212, 0.08)' },
   { ratio: 1.0,   label: '100.0%', color: '#787B86' },
 ];
-
-const HANDLE_RADIUS = 4.5;
-const HANDLE_HIT_RADIUS = 8;
-const LINE_HIT_TOLERANCE = 6;
 
 /** Convert hex or rgb color to rgba with given alpha */
 export function colorWithAlpha(color: string, alpha: number): string {
@@ -238,10 +235,14 @@ export class DrawingStore {
 
   /**
    * Hit test a screen coordinate against existing drawings.
-   * Checks handles of selected drawing first, then other handles, then bodies.
+   * Tolerances are scaled by DPR for flawless mouse and touch precision.
    */
   hitTest(screenX: number, screenY: number, vp: Viewport, bars: BarBuffer): HitResult | null {
     if (bars.len === 0 || this.drawings.length === 0) return null;
+
+    const dpr = vp.dpr || 1;
+    const handleHitRadius = Math.max(10 * dpr, 18);
+    const lineHitTolerance = Math.max(8 * dpr, 14);
 
     // 1. Check handles of selected drawing first (priority for resizing)
     if (this.selectedId) {
@@ -250,8 +251,8 @@ export class DrawingStore {
         for (let i = 0; i < sel.points.length; i++) {
           const pt = sel.points[i];
           const px = timeToScreenX(pt.time, vp, bars);
-          const py = vp.yToScreen(pt.price);
-          if (Math.hypot(screenX - px, screenY - py) <= HANDLE_HIT_RADIUS) {
+          const py = sel.type === 'vline' ? vp.chartH / 2 : vp.yToScreen(pt.price);
+          if (Math.hypot(screenX - px, screenY - py) <= handleHitRadius) {
             return { drawing: sel, hitType: 'point', pointIndex: i };
           }
         }
@@ -265,8 +266,8 @@ export class DrawingStore {
       for (let pIdx = 0; pIdx < d.points.length; pIdx++) {
         const pt = d.points[pIdx];
         const px = timeToScreenX(pt.time, vp, bars);
-        const py = vp.yToScreen(pt.price);
-        if (Math.hypot(screenX - px, screenY - py) <= HANDLE_HIT_RADIUS) {
+        const py = d.type === 'vline' ? vp.chartH / 2 : vp.yToScreen(pt.price);
+        if (Math.hypot(screenX - px, screenY - py) <= handleHitRadius) {
           return { drawing: d, hitType: 'point', pointIndex: pIdx };
         }
       }
@@ -280,7 +281,13 @@ export class DrawingStore {
       if (d.type === 'hline') {
         if (d.points.length < 1) continue;
         const py = vp.yToScreen(d.points[0].price);
-        if (Math.abs(screenY - py) <= LINE_HIT_TOLERANCE && screenX >= 0 && screenX <= vp.w) {
+        if (Math.abs(screenY - py) <= lineHitTolerance && screenX >= 0 && screenX <= vp.w) {
+          return { drawing: d, hitType: 'body' };
+        }
+      } else if (d.type === 'vline') {
+        if (d.points.length < 1) continue;
+        const px = timeToScreenX(d.points[0].time, vp, bars);
+        if (Math.abs(screenX - px) <= lineHitTolerance && screenY >= 0 && screenY <= vp.chartH) {
           return { drawing: d, hitType: 'body' };
         }
       } else if (d.type === 'trendline') {
@@ -289,7 +296,7 @@ export class DrawingStore {
         const y1 = vp.yToScreen(d.points[0].price);
         const x2 = timeToScreenX(d.points[1].time, vp, bars);
         const y2 = vp.yToScreen(d.points[1].price);
-        if (distToSegment(screenX, screenY, x1, y1, x2, y2) <= LINE_HIT_TOLERANCE) {
+        if (distToSegment(screenX, screenY, x1, y1, x2, y2) <= lineHitTolerance) {
           return { drawing: d, hitType: 'body' };
         }
       } else if (d.type === 'rectangle') {
@@ -305,15 +312,15 @@ export class DrawingStore {
         const maxY = Math.max(y1, y2);
 
         // Check inside rect
-        if (screenX >= minX - 3 && screenX <= maxX + 3 &&
-            screenY >= minY - 3 && screenY <= maxY + 3) {
+        if (screenX >= minX - 4 * dpr && screenX <= maxX + 4 * dpr &&
+            screenY >= minY - 4 * dpr && screenY <= maxY + 4 * dpr) {
           return { drawing: d, hitType: 'body' };
         }
         // Check edges with tolerance
-        if (distToSegment(screenX, screenY, minX, minY, maxX, minY) <= LINE_HIT_TOLERANCE ||
-            distToSegment(screenX, screenY, maxX, minY, maxX, maxY) <= LINE_HIT_TOLERANCE ||
-            distToSegment(screenX, screenY, maxX, maxY, minX, maxY) <= LINE_HIT_TOLERANCE ||
-            distToSegment(screenX, screenY, minX, maxY, minX, minY) <= LINE_HIT_TOLERANCE) {
+        if (distToSegment(screenX, screenY, minX, minY, maxX, minY) <= lineHitTolerance ||
+            distToSegment(screenX, screenY, maxX, minY, maxX, maxY) <= lineHitTolerance ||
+            distToSegment(screenX, screenY, maxX, maxY, minX, maxY) <= lineHitTolerance ||
+            distToSegment(screenX, screenY, minX, maxY, minX, minY) <= lineHitTolerance) {
           return { drawing: d, hitType: 'body' };
         }
       } else if (d.type === 'fibonacci') {
@@ -325,27 +332,23 @@ export class DrawingStore {
         const x2 = timeToScreenX(p2.time, vp, bars);
         const y2 = vp.yToScreen(p2.price);
 
-        // Check trendline connecting point 1 and 2
-        if (distToSegment(screenX, screenY, x1, y1, x2, y2) <= LINE_HIT_TOLERANCE) {
+        if (distToSegment(screenX, screenY, x1, y1, x2, y2) <= lineHitTolerance) {
           return { drawing: d, hitType: 'body' };
         }
 
         const minX = Math.min(x1, x2);
         const maxX = Math.max(x1, x2);
-        const lineStart = Math.min(minX, 0);
-        const lineEnd = Math.max(maxX, vp.w);
+        const width = Math.max(maxX - minX, 60 * dpr);
 
-        // Check horizontal level lines
         const priceDiff = p1.price - p2.price;
         for (const level of FIB_LEVELS) {
           const lvlPrice = p2.price + level.ratio * priceDiff;
           const lvlY = vp.yToScreen(lvlPrice);
-          if (distToSegment(screenX, screenY, minX, lvlY, maxX, lvlY) <= LINE_HIT_TOLERANCE) {
+          if (distToSegment(screenX, screenY, minX, lvlY, minX + width, lvlY) <= lineHitTolerance) {
             return { drawing: d, hitType: 'body' };
           }
         }
 
-        // Inside fibonacci bounding box
         const minY = Math.min(y1, y2);
         const maxY = Math.max(y1, y2);
         if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
@@ -409,6 +412,9 @@ export class DrawingRenderer {
         case 'hline':
           this.drawHLine(ctx, vp, bars, drawing, isSelected);
           break;
+        case 'vline':
+          this.drawVLine(ctx, vp, bars, drawing, isSelected);
+          break;
         case 'fibonacci':
           this.drawFibonacci(ctx, vp, bars, drawing, isSelected);
           break;
@@ -424,13 +430,14 @@ export class DrawingRenderer {
     ctx.restore();
   }
 
-  private drawHandle(ctx: CanvasRenderingContext2D, x: number, y: number, color = '#2962FF'): void {
+  private drawHandle(ctx: CanvasRenderingContext2D, x: number, y: number, color = '#2962FF', dpr = 1): void {
+    const r = Math.max(4.5 * dpr, 6);
     ctx.save();
     ctx.fillStyle = '#FFFFFF';
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * dpr;
     ctx.beginPath();
-    ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2);
+    ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.restore();
@@ -444,6 +451,7 @@ export class DrawingRenderer {
     isSelected: boolean
   ): void {
     if (drawing.points.length < 2) return;
+    const dpr = vp.dpr || 1;
     const x1 = timeToScreenX(drawing.points[0].time, vp, bars);
     const y1 = vp.yToScreen(drawing.points[0].price);
     const x2 = timeToScreenX(drawing.points[1].time, vp, bars);
@@ -451,9 +459,9 @@ export class DrawingRenderer {
 
     ctx.save();
     ctx.strokeStyle = drawing.style.color;
-    ctx.lineWidth = drawing.style.width;
+    ctx.lineWidth = (drawing.style.width || 2) * dpr;
     if (drawing.style.dash && drawing.style.dash.length > 0) {
-      ctx.setLineDash(drawing.style.dash);
+      ctx.setLineDash(drawing.style.dash.map(v => v * dpr));
     } else {
       ctx.setLineDash([]);
     }
@@ -465,8 +473,8 @@ export class DrawingRenderer {
     ctx.restore();
 
     if (isSelected) {
-      this.drawHandle(ctx, x1, y1, drawing.style.color);
-      this.drawHandle(ctx, x2, y2, drawing.style.color);
+      this.drawHandle(ctx, x1, y1, drawing.style.color, dpr);
+      this.drawHandle(ctx, x2, y2, drawing.style.color, dpr);
     }
   }
 
@@ -478,15 +486,16 @@ export class DrawingRenderer {
     isSelected: boolean
   ): void {
     if (drawing.points.length < 1) return;
+    const dpr = vp.dpr || 1;
     const price = drawing.points[0].price;
     const y = vp.yToScreen(price);
     const x1 = drawing.points[0].time ? timeToScreenX(drawing.points[0].time, vp, bars) : vp.w / 2;
 
     ctx.save();
     ctx.strokeStyle = drawing.style.color;
-    ctx.lineWidth = drawing.style.width;
+    ctx.lineWidth = (drawing.style.width || 1.5) * dpr;
     if (drawing.style.dash && drawing.style.dash.length > 0) {
-      ctx.setLineDash(drawing.style.dash);
+      ctx.setLineDash(drawing.style.dash.map(v => v * dpr));
     } else {
       ctx.setLineDash([]);
     }
@@ -501,16 +510,16 @@ export class DrawingRenderer {
     // Price badge on the right
     ctx.save();
     const label = price.toFixed(2);
-    ctx.font = '10px ui-monospace,SFMono-Regular,monospace';
+    ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
     const textW = ctx.measureText(label).width;
-    const badgeW = textW + 10;
-    const badgeH = 18;
-    const badgeX = vp.w - badgeW - 4;
+    const badgeW = textW + 10 * dpr;
+    const badgeH = 18 * dpr;
+    const badgeX = vp.w - badgeW - 4 * dpr;
     const badgeY = y - badgeH / 2;
 
     ctx.fillStyle = drawing.style.color;
     ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
+    ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2 * dpr) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
     ctx.fill();
 
     ctx.fillStyle = '#FFFFFF';
@@ -520,8 +529,61 @@ export class DrawingRenderer {
     ctx.restore();
 
     if (isSelected) {
-      const handleX = Math.max(20, Math.min(vp.w - 40, x1));
-      this.drawHandle(ctx, handleX, y, drawing.style.color);
+      const handleX = Math.max(30 * dpr, Math.min(vp.w - 50 * dpr, x1));
+      this.drawHandle(ctx, handleX, y, drawing.style.color, dpr);
+    }
+  }
+
+  private drawVLine(
+    ctx: CanvasRenderingContext2D,
+    vp: Viewport,
+    bars: BarBuffer,
+    drawing: Drawing,
+    isSelected: boolean
+  ): void {
+    if (drawing.points.length < 1) return;
+    const dpr = vp.dpr || 1;
+    const time = drawing.points[0].time;
+    const px = timeToScreenX(time, vp, bars);
+
+    ctx.save();
+    ctx.strokeStyle = drawing.style.color;
+    ctx.lineWidth = (drawing.style.width || 1.5) * dpr;
+    if (drawing.style.dash && drawing.style.dash.length > 0) {
+      ctx.setLineDash(drawing.style.dash.map(v => v * dpr));
+    } else {
+      ctx.setLineDash([]);
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, vp.chartH);
+    ctx.stroke();
+    ctx.restore();
+
+    // Date badge at the bottom
+    ctx.save();
+    const label = fmtDateShort(time);
+    ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    const textW = ctx.measureText(label).width;
+    const badgeW = textW + 10 * dpr;
+    const badgeH = 18 * dpr;
+    const badgeX = px - badgeW / 2;
+    const badgeY = vp.chartH - badgeH - 4 * dpr;
+
+    ctx.fillStyle = drawing.style.color;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2 * dpr) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
+    ctx.fill();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, badgeX + badgeW / 2, badgeY + badgeH / 2);
+    ctx.restore();
+
+    if (isSelected) {
+      this.drawHandle(ctx, px, vp.chartH / 2, drawing.style.color, dpr);
     }
   }
 
@@ -533,6 +595,7 @@ export class DrawingRenderer {
     isSelected: boolean
   ): void {
     if (drawing.points.length < 2) return;
+    const dpr = vp.dpr || 1;
     const p1 = drawing.points[0];
     const p2 = drawing.points[1];
     const x1 = timeToScreenX(p1.time, vp, bars);
@@ -542,13 +605,13 @@ export class DrawingRenderer {
 
     const minX = Math.min(x1, x2);
     const maxX = Math.max(x1, x2);
-    const width = Math.max(maxX - minX, 60);
+    const width = Math.max(maxX - minX, 60 * dpr);
 
     // Diagonal reference line between Point 1 and Point 2
     ctx.save();
     ctx.strokeStyle = colorWithAlpha(drawing.style.color, 0.4);
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1 * dpr;
+    ctx.setLineDash([3 * dpr, 3 * dpr]);
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
@@ -580,14 +643,14 @@ export class DrawingRenderer {
 
     // Draw horizontal lines and level text labels
     ctx.save();
-    ctx.font = '10px ui-monospace,SFMono-Regular,monospace';
+    ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
     ctx.textBaseline = 'bottom';
 
     for (const lvl of levelsCalculated) {
       // Horizontal level line
       ctx.strokeStyle = lvl.color;
-      ctx.lineWidth = 1;
-      ctx.setLineDash(lvl.ratio === 0 || lvl.ratio === 1 ? [] : [2, 2]);
+      ctx.lineWidth = 1 * dpr;
+      ctx.setLineDash(lvl.ratio === 0 || lvl.ratio === 1 ? [] : [2 * dpr, 2 * dpr]);
       ctx.beginPath();
       ctx.moveTo(minX, lvl.y);
       ctx.lineTo(minX + width, lvl.y);
@@ -597,13 +660,13 @@ export class DrawingRenderer {
       const text = `${lvl.label} (${lvl.price.toFixed(2)})`;
       ctx.fillStyle = lvl.color;
       ctx.textAlign = 'left';
-      ctx.fillText(text, minX + 4, lvl.y - 2);
+      ctx.fillText(text, minX + 4 * dpr, lvl.y - 2 * dpr);
     }
     ctx.restore();
 
     if (isSelected) {
-      this.drawHandle(ctx, x1, y1, drawing.style.color);
-      this.drawHandle(ctx, x2, y2, drawing.style.color);
+      this.drawHandle(ctx, x1, y1, drawing.style.color, dpr);
+      this.drawHandle(ctx, x2, y2, drawing.style.color, dpr);
     }
   }
 
@@ -615,6 +678,7 @@ export class DrawingRenderer {
     isSelected: boolean
   ): void {
     if (drawing.points.length < 2) return;
+    const dpr = vp.dpr || 1;
     const x1 = timeToScreenX(drawing.points[0].time, vp, bars);
     const y1 = vp.yToScreen(drawing.points[0].price);
     const x2 = timeToScreenX(drawing.points[1].time, vp, bars);
@@ -632,9 +696,9 @@ export class DrawingRenderer {
 
     // Border stroke
     ctx.strokeStyle = drawing.style.color;
-    ctx.lineWidth = drawing.style.width;
+    ctx.lineWidth = (drawing.style.width || 1.5) * dpr;
     if (drawing.style.dash && drawing.style.dash.length > 0) {
-      ctx.setLineDash(drawing.style.dash);
+      ctx.setLineDash(drawing.style.dash.map(v => v * dpr));
     } else {
       ctx.setLineDash([]);
     }
@@ -642,10 +706,10 @@ export class DrawingRenderer {
     ctx.restore();
 
     if (isSelected) {
-      this.drawHandle(ctx, x1, y1, drawing.style.color);
-      this.drawHandle(ctx, x2, y2, drawing.style.color);
-      this.drawHandle(ctx, x1, y2, drawing.style.color);
-      this.drawHandle(ctx, x2, y1, drawing.style.color);
+      this.drawHandle(ctx, x1, y1, drawing.style.color, dpr);
+      this.drawHandle(ctx, x2, y2, drawing.style.color, dpr);
+      this.drawHandle(ctx, x1, y2, drawing.style.color, dpr);
+      this.drawHandle(ctx, x2, y1, drawing.style.color, dpr);
     }
   }
 
@@ -656,36 +720,68 @@ export class DrawingRenderer {
     store: DrawingStore
   ): void {
     if (!store.activeTool || !store.previewPoint) return;
+    const dpr = vp.dpr || 1;
 
     if (store.activeTool === 'hline') {
       const y = vp.yToScreen(store.previewPoint.price);
       ctx.save();
       ctx.strokeStyle = store.defaultStyle.color;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(vp.w, y);
       ctx.stroke();
 
-      // Preview badge
       const label = store.previewPoint.price.toFixed(2);
-      ctx.font = '10px ui-monospace,SFMono-Regular,monospace';
+      ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
       const textW = ctx.measureText(label).width;
-      const badgeW = textW + 10;
-      const badgeH = 18;
-      const badgeX = vp.w - badgeW - 4;
+      const badgeW = textW + 10 * dpr;
+      const badgeH = 18 * dpr;
+      const badgeX = vp.w - badgeW - 4 * dpr;
       const badgeY = y - badgeH / 2;
 
       ctx.fillStyle = store.defaultStyle.color;
       ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
+      ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2 * dpr) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
       ctx.fill();
 
       ctx.fillStyle = '#FFFFFF';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, badgeX + badgeW / 2, y);
+      ctx.restore();
+      return;
+    }
+
+    if (store.activeTool === 'vline') {
+      const px = timeToScreenX(store.previewPoint.time, vp, bars);
+      ctx.save();
+      ctx.strokeStyle = store.defaultStyle.color;
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, vp.chartH);
+      ctx.stroke();
+
+      const label = fmtDateShort(store.previewPoint.time);
+      ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+      const textW = ctx.measureText(label).width;
+      const badgeW = textW + 10 * dpr;
+      const badgeH = 18 * dpr;
+      const badgeX = px - badgeW / 2;
+      const badgeY = vp.chartH - badgeH - 4 * dpr;
+
+      ctx.fillStyle = store.defaultStyle.color;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2 * dpr) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
+      ctx.fill();
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, badgeX + badgeW / 2, badgeY + badgeH / 2);
       ctx.restore();
       return;
     }
@@ -720,7 +816,7 @@ export class DrawingRenderer {
       // Show handle at point 1
       const x1 = timeToScreenX(pt1.time, vp, bars);
       const y1 = vp.yToScreen(pt1.price);
-      this.drawHandle(ctx, x1, y1, store.defaultStyle.color);
+      this.drawHandle(ctx, x1, y1, store.defaultStyle.color, dpr);
     }
   }
 }

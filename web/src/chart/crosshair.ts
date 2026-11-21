@@ -1,32 +1,43 @@
-// CrosshairRenderer — dashed lines + info box on overlay canvas
+// CrosshairRenderer — dashed lines, precision Y/X axis badges + ATAS / DeepChart HUD
 import type { Viewport } from './viewport.js';
 import type { BarBuffer } from './data.js';
 import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf } from './util.js';
 
 const XH_COLOR = '#9598A1';
-const BG_TAG = '#363A45';
-const BORDER_TAG = '#4c525e';
+const BG_TAG = '#2A2E39';
+const BORDER_TAG = '#4C525E';
 
 export class CrosshairRenderer {
-  mx = -1; // screen x
-  my = -1; // screen y
+  mx = -1; // screen x (in device pixels)
+  my = -1; // screen y (in device pixels)
   visible = false;
 
   update(x: number, y: number): void {
-    this.mx = x; this.my = y;
+    this.mx = x;
+    this.my = y;
     this.visible = true;
   }
 
-  hide(): void { this.visible = false; }
+  hide(): void {
+    this.visible = false;
+  }
 
-  draw(ovCtx: CanvasRenderingContext2D, yCtx: CanvasRenderingContext2D, xCtx: CanvasRenderingContext2D,
-       vp: Viewport, bars: BarBuffer, tf: number, tickSize: number): void {
+  draw(
+    ovCtx: CanvasRenderingContext2D,
+    yCtx: CanvasRenderingContext2D,
+    xCtx: CanvasRenderingContext2D,
+    vp: Viewport,
+    bars: BarBuffer,
+    tf: number,
+    tickSize: number,
+  ): void {
     if (!this.visible) return;
 
     const w = vp.w, h = vp.h;
+    const dpr = vp.dpr || 1;
     const dec = decimalsOf(tickSize);
 
-    // Calculate snap X to candle center if within bounds
+    // Calculate snap X to candle center if hovering inside chart bounds
     const barIdx = Math.round(vp.screenToX(this.mx));
     const hasBar = barIdx >= 0 && barIdx < bars.len;
     const snapX = hasBar ? Math.round(vp.xToScreen(barIdx)) + 0.5 : this.mx + 0.5;
@@ -34,17 +45,17 @@ export class CrosshairRenderer {
     // --- Overlay canvas: dashed lines ---
     ovCtx.save();
     ovCtx.strokeStyle = XH_COLOR;
-    ovCtx.lineWidth = 1;
-    ovCtx.setLineDash([4, 3]);
-    ovCtx.globalAlpha = 0.65;
+    ovCtx.lineWidth = 1 * dpr;
+    ovCtx.setLineDash([4 * dpr, 3 * dpr]);
+    ovCtx.globalAlpha = 0.7;
 
-    // horizontal line
+    // Horizontal line across chart
     ovCtx.beginPath();
     ovCtx.moveTo(0, this.my + 0.5);
     ovCtx.lineTo(w, this.my + 0.5);
     ovCtx.stroke();
 
-    // vertical line (snapped to candle)
+    // Vertical line across chart
     ovCtx.beginPath();
     ovCtx.moveTo(snapX, 0);
     ovCtx.lineTo(snapX, h);
@@ -55,40 +66,41 @@ export class CrosshairRenderer {
     ovCtx.save();
     ovCtx.fillStyle = '#FFFFFF';
     ovCtx.beginPath();
-    ovCtx.arc(snapX, this.my + 0.5, 2.5, 0, Math.PI * 2);
+    ovCtx.arc(snapX, this.my + 0.5, 2.5 * dpr, 0, Math.PI * 2);
     ovCtx.fill();
-
-    // If hovering on a valid candle, also highlight the candle close point
-    if (hasBar) {
-      const closeY = Math.round(vp.yToScreen(bars.c[barIdx])) + 0.5;
-      const bull = bars.c[barIdx] >= bars.o[barIdx];
-      ovCtx.fillStyle = bull ? '#26A69A' : '#EF5350';
-      ovCtx.beginPath();
-      ovCtx.arc(snapX, closeY, 2.5, 0, Math.PI * 2);
-      ovCtx.fill();
-    }
     ovCtx.restore();
 
-    // --- Y-axis price tag ---
+    // --- Y-axis price badge ---
     if (this.my >= 0 && this.my <= vp.chartH) {
       const price = vp.screenToY(this.my);
       const label = fmtPrice(price, dec);
       const yw = yCtx.canvas.width;
+      const h2 = 10 * dpr;
+
       yCtx.save();
       yCtx.fillStyle = BG_TAG;
-      yCtx.fillRect(0, this.my - 10, yw, 20);
       yCtx.strokeStyle = BORDER_TAG;
-      yCtx.lineWidth = 1;
-      yCtx.strokeRect(0.5, this.my - 9.5, yw - 1, 19);
+      yCtx.lineWidth = 1 * dpr;
+
+      yCtx.beginPath();
+      yCtx.moveTo(0, this.my);
+      yCtx.lineTo(5 * dpr, this.my - h2);
+      yCtx.lineTo(yw, this.my - h2);
+      yCtx.lineTo(yw, this.my + h2);
+      yCtx.lineTo(5 * dpr, this.my + h2);
+      yCtx.closePath();
+      yCtx.fill();
+      yCtx.stroke();
+
       yCtx.fillStyle = '#FFFFFF';
-      yCtx.font = 'bold 11px ui-monospace,SFMono-Regular,monospace';
+      yCtx.font = `bold ${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
       yCtx.textAlign = 'center';
       yCtx.textBaseline = 'middle';
-      yCtx.fillText(label, yw / 2, this.my);
+      yCtx.fillText(label, (yw + 4 * dpr) / 2, this.my);
       yCtx.restore();
     }
 
-    // --- X-axis time tag ---
+    // --- X-axis date & time badge ---
     let ts: number;
     if (bars.len > 0) {
       if (barIdx >= 0 && barIdx < bars.len) {
@@ -105,15 +117,18 @@ export class CrosshairRenderer {
     const label = fmtDate(ts, tf);
     const xh = xCtx.canvas.height;
     const xw = xCtx.canvas.width;
+
     xCtx.save();
-    xCtx.font = '10px ui-monospace,SFMono-Regular,monospace';
-    const tw = xCtx.measureText(label).width + 14;
+    xCtx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    const tw = xCtx.measureText(label).width + 16 * dpr;
     const clampSnapX = Math.max(tw / 2, Math.min(xw - tw / 2, snapX));
+
     xCtx.fillStyle = BG_TAG;
     xCtx.fillRect(clampSnapX - tw / 2, 0, tw, xh);
     xCtx.strokeStyle = BORDER_TAG;
-    xCtx.lineWidth = 1;
+    xCtx.lineWidth = 1 * dpr;
     xCtx.strokeRect(clampSnapX - tw / 2 + 0.5, 0.5, tw - 1, xh - 1);
+
     xCtx.fillStyle = '#FFFFFF';
     xCtx.textAlign = 'center';
     xCtx.textBaseline = 'middle';
@@ -142,13 +157,13 @@ export class CrosshairRenderer {
     const ts = bars.t[idx];
     const timeStr = fmtDate(ts, tf);
 
-    el.innerHTML = `<span class="iv">${timeStr}</span> `
+    el.innerHTML = `<span class="iv" style="color:#B2B5BE;font-weight:600">[${timeStr}]</span> `
       + `<b>O</b> <span class="${cls}">${fmtPrice(o, dec)}</span> `
       + `<b>H</b> <span class="${cls}">${fmtPrice(h, dec)}</span> `
       + `<b>L</b> <span class="${cls}">${fmtPrice(l, dec)}</span> `
       + `<b>C</b> <span class="${cls}">${fmtPrice(c, dec)}</span> `
       + `<b>Chg</b> <span class="${cls}">${fmtChg(diff, dec)} (${fmtPct(pct)})</span> `
-      + `<b>V</b> <span class="iv">${formatVol(v)}</span>`;
+      + `<b>Vol</b> <span class="iv">${formatVol(v)}</span>`;
   }
 }
 

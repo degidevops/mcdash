@@ -11,13 +11,18 @@ export class Viewport {
     // screen dimensions
     w = 800;
     h = 600;
+    dpr = 1;
     // volume panel occupies bottom fraction of canvas
     volFrac = 0.18;
     /** Chart area height (above volume panel) */
     get chartH() { return this.h * (1 - this.volFrac); }
     /** Volume panel height */
     get volH() { return this.h * this.volFrac; }
-    setSize(w, h) { this.w = w; this.h = h; }
+    setSize(w, h, dpr = 1) {
+        this.w = w;
+        this.h = h;
+        this.dpr = dpr;
+    }
     /** Number of visible bars */
     get visibleBars() { return this.xMax - this.xMin; }
     /** Width of one bar in pixels */

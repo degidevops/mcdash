@@ -1,16 +1,17 @@
 import { niceStep, niceTimeStep } from './util.js';
-const GRID = '#2A2E39';
+const GRID = '#1E222D';
 const VOL_SEPARATOR = '#363A45';
 export class GridRenderer {
     draw(ctx, vp, tfSec) {
         const w = vp.w, h = vp.h;
+        const dpr = vp.dpr || 1;
         ctx.clearRect(0, 0, w, h);
         // --- Horizontal price grid ---
         const priceRange = vp.yMax - vp.yMin;
-        const step = niceStep(priceRange, Math.floor(vp.chartH / 50));
+        const step = niceStep(priceRange, Math.floor(vp.chartH / (50 * dpr)));
         const pStart = Math.ceil(vp.yMin / step) * step;
         ctx.strokeStyle = GRID;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1 * dpr;
         ctx.setLineDash([]);
         ctx.beginPath();
         for (let p = pStart; p <= vp.yMax; p += step) {
@@ -24,10 +25,11 @@ export class GridRenderer {
         // --- Vertical time grid ---
         const visibleBars = vp.visibleBars;
         const rangeSec = visibleBars * tfSec * 60; // tf is in minutes
-        const tStep = niceTimeStep(rangeSec, Math.floor(w / 100));
+        const tStep = niceTimeStep(rangeSec, Math.floor(w / (100 * dpr)));
         const tStepBars = tStep / (tfSec * 60); // time step in bar-index units
         if (tStepBars > 0) {
             ctx.strokeStyle = GRID;
+            ctx.lineWidth = 1 * dpr;
             ctx.beginPath();
             const iStart = Math.ceil(vp.xMin / tStepBars) * tStepBars;
             for (let bi = iStart; bi <= vp.xMax; bi += tStepBars) {
@@ -42,7 +44,7 @@ export class GridRenderer {
         // --- Volume separator line ---
         const volY = Math.round(vp.chartH) + 0.5;
         ctx.strokeStyle = VOL_SEPARATOR;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1 * dpr;
         ctx.beginPath();
         ctx.moveTo(0, volY);
         ctx.lineTo(w, volY);

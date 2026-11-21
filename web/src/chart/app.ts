@@ -36,6 +36,10 @@ export class ChartApp {
   private btnFollowEl!: HTMLElement;
   private btnTpoEl!: HTMLElement;
   private btnNPocEl!: HTMLElement;
+  private btnExportEl!: HTMLElement;
+  private btnShortcutsEl!: HTMLElement;
+  private shortcutsModalEl!: HTMLElement;
+  private btnCloseShortcutsEl!: HTMLElement;
   private chartMainEl!: HTMLElement;
   private btnClearDrawingsEl!: HTMLElement;
 
@@ -66,6 +70,14 @@ export class ChartApp {
     moved: boolean;
   } | null = null;
 
+  // Track initial press when drawing shapes to support both click-drag and click-click
+  private toolPressStart: {
+    screenX: number;
+    screenY: number;
+    time: number;
+    price: number;
+  } | null = null;
+
   private tf = 60; // current timeframe in minutes
   private tickSize = 0.01;
   private openPrice = 0;
@@ -89,6 +101,10 @@ export class ChartApp {
     this.btnFollowEl = document.getElementById('btnFollow')!;
     this.btnTpoEl = document.getElementById('btnTpo')!;
     this.btnNPocEl = document.getElementById('btnNPoc')!;
+    this.btnExportEl = document.getElementById('btnExport')!;
+    this.btnShortcutsEl = document.getElementById('btnShortcuts')!;
+    this.shortcutsModalEl = document.getElementById('shortcutsModal')!;
+    this.btnCloseShortcutsEl = document.getElementById('btnCloseShortcuts')!;
     this.chartMainEl = document.getElementById('chartMain')!;
     this.btnClearDrawingsEl = document.getElementById('btnClearDrawings')!;
 
@@ -96,6 +112,7 @@ export class ChartApp {
     this.drawingStore.loadFromStorage(this.symbol);
     this.bindDrawingUI();
     this.bindDrawingMouse();
+    this.bindDrawingTouch();
 
     // WebGL context first
     this.glCtx = initGL(this.glCanvas);
@@ -122,6 +139,7 @@ export class ChartApp {
       (x, y) => { this.crosshair.update(x, y); this.markDirty(); },
       () => { this.crosshair.hide(); this.markDirty(); },
       (follow) => this.updateAutoFollowBtn(follow),
+      () => this.drawingStore.activeTool !== null,
     );
 
     // Live bar timer tick every second for Y-axis countdown
@@ -148,6 +166,28 @@ export class ChartApp {
         const on = this.tpo.toggleNPOC();
         this.btnNPocEl.classList.toggle('on', on);
         this.markDirty();
+      });
+    }
+
+    // Export screenshot
+    if (this.btnExportEl) {
+      this.btnExportEl.addEventListener('click', () => this.exportPNG());
+    }
+
+    // Shortcuts modal
+    if (this.btnShortcutsEl && this.shortcutsModalEl) {
+      this.btnShortcutsEl.addEventListener('click', () => {
+        this.shortcutsModalEl.classList.add('open');
+      });
+      if (this.btnCloseShortcutsEl) {
+        this.btnCloseShortcutsEl.addEventListener('click', () => {
+          this.shortcutsModalEl.classList.remove('open');
+        });
+      }
+      this.shortcutsModalEl.addEventListener('click', (e) => {
+        if (e.target === this.shortcutsModalEl) {
+          this.shortcutsModalEl.classList.remove('open');
+        }
       });
     }
 
@@ -208,6 +248,11 @@ export class ChartApp {
         case '4': this.switchTf(60); break;
         case '5': this.switchTf(240); break;
         case '6': this.switchTf(1440); break;
+        case '?':
+          if (this.shortcutsModalEl) {
+            this.shortcutsModalEl.classList.toggle('open');
+          }
+          break;
         case 'Home':
           this.resetToLive();
           break;
@@ -260,6 +305,10 @@ export class ChartApp {
         case 'H':
           this.setTool('hline');
           break;
+        case 'l':
+        case 'L':
+          this.setTool('vline');
+          break;
         case 'f':
         case 'F':
           this.setTool('fibonacci');
@@ -273,7 +322,9 @@ export class ChartApp {
           this.setTool(null);
           break;
         case 'Escape':
-          if (this.drawingStore.activeTool || this.drawingStore.pendingPoints.length > 0) {
+          if (this.shortcutsModalEl?.classList.contains('open')) {
+            this.shortcutsModalEl.classList.remove('open');
+          } else if (this.drawingStore.activeTool || this.drawingStore.pendingPoints.length > 0) {
             this.setTool(null);
           } else if (this.drawingStore.selectedId) {
             this.drawingStore.setSelected(null);
@@ -322,7 +373,7 @@ export class ChartApp {
     this.drawingStore.setActiveTool(tool);
     this.updateToolbarUI();
     if (this.chartMainEl) {
-      this.chartMainEl.style.cursor = 'crosshair';
+      this.chartMainEl.style.cursor = tool ? 'crosshair' : 'default';
     }
     this.markDirty();
   }
@@ -357,6 +408,7 @@ export class ChartApp {
 
       if (this.drawingStore.activeTool) {
         e.stopPropagation();
+        this.toolPressStart = { screenX, screenY, time, price };
         this.handleToolMouseDown(screenX, screenY, time, price);
         return;
       }
@@ -438,12 +490,143 @@ export class ChartApp {
       }
     });
 
-    window.addEventListener('mouseup', () => {
+    window.addEventListener('mouseup', (e: MouseEvent) => {
       if (this.draggingDrawing) {
         if (this.draggingDrawing.moved) {
           this.drawingStore.saveToStorage(this.symbol);
         }
         this.draggingDrawing = null;
+      }
+
+      // Check if user finished a click-and-drag gesture for multi-point drawing
+      if (this.drawingStore.activeTool && this.toolPressStart && this.drawingStore.pendingPoints.length === 1) {
+        const rect = this.chartMainEl.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const screenX = (e.clientX - rect.left) * dpr;
+        const screenY = (e.clientY - rect.top) * dpr;
+        const dist = Math.hypot(screenX - this.toolPressStart.screenX, screenY - this.toolPressStart.screenY);
+
+        if (dist > 15 * dpr) {
+          // Finished drag gesture
+          const price = this.vp.screenToY(screenY);
+          const time = screenXToTime(screenX, this.vp, this.bars);
+          this.finalizeMultiPointDrawing(time, price);
+        }
+        this.toolPressStart = null;
+      }
+    });
+  }
+
+  /** Touch screen support for drawing tools and selection */
+  private bindDrawingTouch(): void {
+    this.chartMainEl.addEventListener('touchstart', (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const rect = this.chartMainEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const screenX = (touch.clientX - rect.left) * dpr;
+      const screenY = (touch.clientY - rect.top) * dpr;
+
+      if (screenY > this.vp.chartH) return;
+
+      const price = this.vp.screenToY(screenY);
+      const time = screenXToTime(screenX, this.vp, this.bars);
+
+      if (this.drawingStore.activeTool) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.toolPressStart = { screenX, screenY, time, price };
+        this.handleToolMouseDown(screenX, screenY, time, price);
+        return;
+      }
+
+      const hit = this.drawingStore.hitTest(screenX, screenY, this.vp, this.bars);
+      if (hit) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.drawingStore.setSelected(hit.drawing.id);
+        this.draggingDrawing = {
+          drawingId: hit.drawing.id,
+          hitType: hit.hitType,
+          pointIndex: hit.pointIndex,
+          startPoint: { time, price },
+          startPoints: hit.drawing.points.map(p => ({ ...p })),
+          startScreenX: screenX,
+          startScreenY: screenY,
+          moved: false,
+        };
+        this.markDirty();
+      }
+    }, { passive: false });
+
+    this.chartMainEl.addEventListener('touchmove', (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const rect = this.chartMainEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const screenX = (touch.clientX - rect.left) * dpr;
+      const screenY = (touch.clientY - rect.top) * dpr;
+
+      const price = this.vp.screenToY(screenY);
+      const time = screenXToTime(screenX, this.vp, this.bars);
+
+      if (this.draggingDrawing) {
+        e.preventDefault();
+        const d = this.drawingStore.getDrawing(this.draggingDrawing.drawingId);
+        if (d && !d.locked) {
+          if (this.draggingDrawing.hitType === 'point' && this.draggingDrawing.pointIndex !== undefined) {
+            if (d.points[this.draggingDrawing.pointIndex]) {
+              d.points[this.draggingDrawing.pointIndex] = { time, price };
+              this.draggingDrawing.moved = true;
+              this.markDirty();
+            }
+          } else if (this.draggingDrawing.hitType === 'body') {
+            const dt = time - this.draggingDrawing.startPoint.time;
+            const dp = price - this.draggingDrawing.startPoint.price;
+            for (let i = 0; i < d.points.length; i++) {
+              d.points[i] = {
+                time: this.draggingDrawing.startPoints[i].time + dt,
+                price: this.draggingDrawing.startPoints[i].price + dp,
+              };
+            }
+            this.draggingDrawing.moved = true;
+            this.markDirty();
+          }
+        }
+        return;
+      }
+
+      if (this.drawingStore.activeTool && this.drawingStore.pendingPoints.length === 1) {
+        e.preventDefault();
+        this.drawingStore.previewPoint = { time, price };
+        this.markDirty();
+      }
+    }, { passive: false });
+
+    this.chartMainEl.addEventListener('touchend', (e: TouchEvent) => {
+      if (this.draggingDrawing) {
+        if (this.draggingDrawing.moved) {
+          this.drawingStore.saveToStorage(this.symbol);
+        }
+        this.draggingDrawing = null;
+      }
+
+      if (this.drawingStore.activeTool && this.toolPressStart && this.drawingStore.pendingPoints.length === 1) {
+        const touch = e.changedTouches[0];
+        if (touch) {
+          const rect = this.chartMainEl.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          const screenX = (touch.clientX - rect.left) * dpr;
+          const screenY = (touch.clientY - rect.top) * dpr;
+          const dist = Math.hypot(screenX - this.toolPressStart.screenX, screenY - this.toolPressStart.screenY);
+
+          if (dist > 20 * dpr) {
+            const price = this.vp.screenToY(screenY);
+            const time = screenXToTime(screenX, this.vp, this.bars);
+            this.finalizeMultiPointDrawing(time, price);
+          }
+        }
+        this.toolPressStart = null;
       }
     });
   }
@@ -467,31 +650,93 @@ export class ChartApp {
       return;
     }
 
-    if (this.drawingStore.pendingPoints.length === 0) {
-      this.drawingStore.pendingPoints = [{ time, price }];
-      this.drawingStore.previewPoint = { time, price };
-      this.markDirty();
-    } else if (this.drawingStore.pendingPoints.length === 1) {
-      const p1 = this.drawingStore.pendingPoints[0];
-      const p2 = { time, price };
-
-      let style: Partial<DrawingStyle> = { color: '#2962FF', width: 2 };
-      if (tool === 'fibonacci') {
-        style = { color: '#9C27B0', width: 1 };
-      } else if (tool === 'rectangle') {
-        style = { color: '#2962FF', width: 1.5 };
-      } else if (tool === 'trendline') {
-        style = { color: '#2962FF', width: 2 };
-      }
-
-      const drawing = createDrawing(tool, [p1, p2], style);
+    if (tool === 'vline') {
+      const drawing = createDrawing('vline', [{ time, price }], {
+        color: '#787B86',
+        width: 1.5,
+        dash: [4, 4],
+      });
       this.drawingStore.addDrawing(drawing);
       this.drawingStore.setSelected(drawing.id);
       this.drawingStore.cancelPending();
       this.setTool(null);
       this.drawingStore.saveToStorage(this.symbol);
       this.markDirty();
+      return;
     }
+
+    if (this.drawingStore.pendingPoints.length === 0) {
+      this.drawingStore.pendingPoints = [{ time, price }];
+      this.drawingStore.previewPoint = { time, price };
+      this.markDirty();
+    } else if (this.drawingStore.pendingPoints.length === 1) {
+      this.finalizeMultiPointDrawing(time, price);
+    }
+  }
+
+  private finalizeMultiPointDrawing(time: number, price: number): void {
+    const tool = this.drawingStore.activeTool;
+    if (!tool || this.drawingStore.pendingPoints.length === 0) return;
+
+    const p1 = this.drawingStore.pendingPoints[0];
+    const p2 = { time, price };
+
+    let style: Partial<DrawingStyle> = { color: '#2962FF', width: 2 };
+    if (tool === 'fibonacci') {
+      style = { color: '#9C27B0', width: 1 };
+    } else if (tool === 'rectangle') {
+      style = { color: '#2962FF', width: 1.5 };
+    } else if (tool === 'trendline') {
+      style = { color: '#2962FF', width: 2 };
+    }
+
+    const drawing = createDrawing(tool, [p1, p2], style);
+    this.drawingStore.addDrawing(drawing);
+    this.drawingStore.setSelected(drawing.id);
+    this.drawingStore.cancelPending();
+    this.setTool(null);
+    this.drawingStore.saveToStorage(this.symbol);
+    this.markDirty();
+  }
+
+  /** Export chart as high-resolution PNG image */
+  private exportPNG(): void {
+    const totalW = this.glCanvas.width + this.yCanvas.width;
+    const totalH = this.glCanvas.height + this.xCanvas.height;
+
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = totalW;
+    exportCanvas.height = totalH;
+    const ctx = exportCanvas.getContext('2d');
+    if (!ctx) return;
+
+    // Background
+    ctx.fillStyle = '#131722';
+    ctx.fillRect(0, 0, totalW, totalH);
+
+    // 1. WebGL Candles and Volume
+    ctx.drawImage(this.glCanvas, 0, 0);
+
+    // 2. 2D Overlay (TPO, Drawings, Crosshair)
+    ctx.drawImage(this.ovCanvas, 0, 0);
+
+    // 3. Y Axis
+    ctx.drawImage(this.yCanvas, this.glCanvas.width, 0);
+
+    // 4. X Axis
+    ctx.drawImage(this.xCanvas, 0, this.glCanvas.height);
+
+    // 5. Watermark ATAS / MCDash
+    ctx.font = 'bold 12px ui-monospace,SFMono-Regular,monospace';
+    ctx.fillStyle = 'rgba(120, 123, 134, 0.45)';
+    ctx.textAlign = 'right';
+    ctx.fillText(`MCDash • ${this.symbol} • ${this.tf}m`, totalW - 14, totalH - 10);
+
+    // Trigger download
+    const link = document.createElement('a');
+    link.download = `mcdash-${this.symbol.toLowerCase()}-${this.tf}m-${Date.now()}.png`;
+    link.href = exportCanvas.toDataURL('image/png');
+    link.click();
   }
 
   private resetToLive(): void {
@@ -523,14 +768,14 @@ export class ChartApp {
     this.ovCanvas.height = h * dpr;
 
     const yAxis = document.getElementById('yAxis')!;
-    this.yCanvas.width = (yAxis.clientWidth || 72) * dpr;
+    this.yCanvas.width = (yAxis.clientWidth || 76) * dpr;
     this.yCanvas.height = (yAxis.clientHeight || h) * dpr;
 
     const xAxis = document.getElementById('xAxis') || this.xCanvas.parentElement!;
     this.xCanvas.width = (xAxis.clientWidth || w) * dpr;
-    this.xCanvas.height = (xAxis.clientHeight || 24) * dpr;
+    this.xCanvas.height = (xAxis.clientHeight || 26) * dpr;
 
-    this.vp.setSize(w * dpr, h * dpr);
+    this.vp.setSize(w * dpr, h * dpr, dpr);
     if (this.glCtx && this.glCtx.gl) {
       this.glCtx.gl.viewport(0, 0, w * dpr, h * dpr);
     }
@@ -657,10 +902,11 @@ export class ChartApp {
     if (lastP > 0 && lastP >= vp.yMin && lastP <= vp.yMax) {
       const y = Math.round(vp.yToScreen(lastP)) + 0.5;
       const bull = lastP >= this.openPrice;
+      const dpr = vp.dpr || 1;
       this.ovCtx.save();
       this.ovCtx.strokeStyle = bull ? '#26A69A' : '#EF5350';
-      this.ovCtx.lineWidth = 1;
-      this.ovCtx.setLineDash([6, 3]);
+      this.ovCtx.lineWidth = 1 * dpr;
+      this.ovCtx.setLineDash([6 * dpr, 3 * dpr]);
       this.ovCtx.beginPath();
       this.ovCtx.moveTo(0, y);
       this.ovCtx.lineTo(vp.w, y);

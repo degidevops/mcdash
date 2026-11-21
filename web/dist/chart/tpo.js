@@ -77,6 +77,7 @@ export class TpoRenderer {
             return;
         const chartW = vp.w;
         const chartH = vp.chartH;
+        const dpr = vp.dpr || 1;
         ctx.save();
         // Clip to chart drawing area (exclude axes & volume)
         ctx.beginPath();
@@ -92,25 +93,25 @@ export class TpoRenderer {
             if (Math.max(xStart, xEnd) < 0 || Math.min(xStart, xEnd) > chartW) {
                 // Still might need to draw nPOC if it extends across screen
                 if (this.showNPOC && !period.touched_poc) {
-                    this.drawNPocLine(ctx, period, xStart, chartW, vp);
+                    this.drawNPocLine(ctx, period, xStart, chartW, vp, dpr);
                 }
                 continue;
             }
             // 1.1 Session Separator line at xStart
             ctx.save();
             ctx.strokeStyle = '#363A45';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 1 * dpr;
+            ctx.setLineDash([4 * dpr, 4 * dpr]);
             ctx.beginPath();
             ctx.moveTo(xStart, 0);
             ctx.lineTo(xStart, chartH);
             ctx.stroke();
             // Session Name Header
             ctx.setLineDash([]);
-            ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace';
-            ctx.fillStyle = '#787B86';
+            ctx.font = `600 ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+            ctx.fillStyle = '#9598A1';
             ctx.textAlign = 'left';
-            ctx.fillText(`╎ ${period.name}`, xStart + 4, 18);
+            ctx.fillText(`╎ ${period.name}`, xStart + 4 * dpr, 18 * dpr);
             ctx.restore();
             // 1.2 TPO Histogram Blocks
             if (period.rows && period.rows.length > 0) {
@@ -120,13 +121,13 @@ export class TpoRenderer {
                         maxCount = r.count;
                 }
                 const periodWidth = Math.abs(xEnd - xStart);
-                const maxHistWidth = Math.min(periodWidth * 0.70, 280);
+                const maxHistWidth = Math.min(periodWidth * 0.70, 280 * dpr);
                 for (const row of period.rows) {
                     if (row.price < vp.yMin || row.price > vp.yMax)
                         continue;
                     const yCenter = vp.yToScreen(row.price);
                     const yNext = vp.yToScreen(row.price + period.tick);
-                    const rowHeight = Math.max(1, Math.abs(yCenter - yNext));
+                    const rowHeight = Math.max(1 * dpr, Math.abs(yCenter - yNext));
                     const barWidth = (row.count / maxCount) * maxHistWidth;
                     // Color based on status
                     if (row.is_poc) {
@@ -138,26 +139,26 @@ export class TpoRenderer {
                     else {
                         ctx.fillStyle = 'rgba(120, 123, 134, 0.12)'; // Outside VA
                     }
-                    ctx.fillRect(xStart, yCenter - rowHeight / 2, barWidth, Math.max(1, rowHeight - 0.5));
+                    ctx.fillRect(xStart, yCenter - rowHeight / 2, barWidth, Math.max(1 * dpr, rowHeight - 0.5 * dpr));
                     // Draw letters if zoomed in enough vertically
-                    if (this.showLetters && rowHeight >= 11 && barWidth > 15) {
-                        ctx.font = '9px monospace';
+                    if (this.showLetters && rowHeight >= 11 * dpr && barWidth > 15 * dpr) {
+                        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
                         ctx.fillStyle = row.is_poc ? '#FF8A80' : row.in_va ? '#90CAF9' : '#B0BEC5';
                         ctx.textAlign = 'left';
-                        ctx.fillText(row.letters, xStart + 3, yCenter + 3, barWidth - 4);
+                        ctx.fillText(row.letters, xStart + 3 * dpr, yCenter + 3 * dpr, barWidth - 4 * dpr);
                     }
                 }
             }
             // 1.3 POC, VAH, VAL Lines for this period
-            this.drawPeriodLevels(ctx, period, xStart, xEnd, vp);
+            this.drawPeriodLevels(ctx, period, xStart, xEnd, vp, dpr);
             // 1.4 Naked POC extension if applicable
             if (this.showNPOC && !period.touched_poc) {
-                this.drawNPocLine(ctx, period, xStart, chartW, vp);
+                this.drawNPocLine(ctx, period, xStart, chartW, vp, dpr);
             }
         }
         ctx.restore();
     }
-    drawPeriodLevels(ctx, period, xStart, xEnd, vp) {
+    drawPeriodLevels(ctx, period, xStart, xEnd, vp, dpr) {
         const left = Math.min(xStart, xEnd);
         const right = Math.max(xStart, xEnd);
         // VAH Line (Gold dashed)
@@ -165,14 +166,14 @@ export class TpoRenderer {
             const yVah = vp.yToScreen(period.vah);
             ctx.save();
             ctx.strokeStyle = '#FFD700';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([4, 3]);
+            ctx.lineWidth = 1 * dpr;
+            ctx.setLineDash([4 * dpr, 3 * dpr]);
             ctx.beginPath();
             ctx.moveTo(left, yVah);
             ctx.lineTo(right, yVah);
             ctx.stroke();
             // VAH badge
-            this.drawLevelBadge(ctx, 'VAH', period.vah, right - 4, yVah, '#FFD700');
+            this.drawLevelBadge(ctx, 'VAH', period.vah, right - 4 * dpr, yVah, '#FFD700', dpr);
             ctx.restore();
         }
         // VAL Line (Gold dashed)
@@ -180,14 +181,14 @@ export class TpoRenderer {
             const yVal = vp.yToScreen(period.val);
             ctx.save();
             ctx.strokeStyle = '#FFD700';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([4, 3]);
+            ctx.lineWidth = 1 * dpr;
+            ctx.setLineDash([4 * dpr, 3 * dpr]);
             ctx.beginPath();
             ctx.moveTo(left, yVal);
             ctx.lineTo(right, yVal);
             ctx.stroke();
             // VAL badge
-            this.drawLevelBadge(ctx, 'VAL', period.val, right - 4, yVal, '#FFD700');
+            this.drawLevelBadge(ctx, 'VAL', period.val, right - 4 * dpr, yVal, '#FFD700', dpr);
             ctx.restore();
         }
         // POC Line (Red)
@@ -195,18 +196,18 @@ export class TpoRenderer {
             const yPoc = vp.yToScreen(period.poc);
             ctx.save();
             ctx.strokeStyle = '#FF5252';
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([6, 3]);
+            ctx.lineWidth = 1.5 * dpr;
+            ctx.setLineDash([6 * dpr, 3 * dpr]);
             ctx.beginPath();
             ctx.moveTo(left, yPoc);
             ctx.lineTo(right, yPoc);
             ctx.stroke();
             // POC badge
-            this.drawLevelBadge(ctx, 'POC', period.poc, right - 4, yPoc, '#FF5252');
+            this.drawLevelBadge(ctx, 'POC', period.poc, right - 4 * dpr, yPoc, '#FF5252', dpr);
             ctx.restore();
         }
     }
-    drawNPocLine(ctx, period, xStart, chartW, vp) {
+    drawNPocLine(ctx, period, xStart, chartW, vp, dpr) {
         if (period.poc <= 0)
             return;
         const yPoc = vp.yToScreen(period.poc);
@@ -214,45 +215,49 @@ export class TpoRenderer {
             return;
         ctx.save();
         ctx.strokeStyle = '#FF1744';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([2, 2]);
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.setLineDash([3 * dpr, 3 * dpr]);
         ctx.beginPath();
         ctx.moveTo(Math.max(0, xStart), yPoc);
         ctx.lineTo(chartW, yPoc);
         ctx.stroke();
         // Naked POC Tag near right edge
         const tag = `nPOC ${period.name}: ${period.poc.toFixed(2)}`;
-        ctx.font = 'bold 9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         const tw = ctx.measureText(tag).width;
-        const bx = chartW - tw - 12;
-        const by = yPoc - 7;
-        ctx.fillStyle = 'rgba(25, 28, 36, 0.85)';
+        const pad = 6 * dpr;
+        const badgeH = 16 * dpr;
+        const bx = chartW - tw - pad * 2 - 4 * dpr;
+        const by = yPoc - badgeH / 2;
+        ctx.fillStyle = 'rgba(19, 23, 34, 0.90)';
         ctx.strokeStyle = '#FF1744';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1 * dpr;
         ctx.setLineDash([]);
-        ctx.fillRect(bx, by, tw + 8, 14);
-        ctx.strokeRect(bx, by, tw + 8, 14);
+        ctx.fillRect(bx, by, tw + pad * 2, badgeH);
+        ctx.strokeRect(bx, by, tw + pad * 2, badgeH);
         ctx.fillStyle = '#FF5252';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(tag, bx + 4, yPoc);
+        ctx.fillText(tag, bx + pad, yPoc);
         ctx.restore();
     }
-    drawLevelBadge(ctx, label, price, x, y, color) {
+    drawLevelBadge(ctx, label, price, x, y, color, dpr) {
         const text = `${label} ${price.toFixed(2)}`;
-        ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         const tw = ctx.measureText(text).width;
-        const bx = x - tw - 6;
-        const by = y - 6;
+        const pad = 5 * dpr;
+        const badgeH = 15 * dpr;
+        const bx = x - tw - pad * 2;
+        const by = y - badgeH / 2;
         ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(19, 23, 34, 0.85)';
-        ctx.fillRect(bx, by, tw + 6, 12);
+        ctx.fillStyle = 'rgba(19, 23, 34, 0.90)';
+        ctx.fillRect(bx, by, tw + pad * 2, badgeH);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 0.8;
-        ctx.strokeRect(bx, by, tw + 6, 12);
+        ctx.lineWidth = 1 * dpr;
+        ctx.strokeRect(bx, by, tw + pad * 2, badgeH);
         ctx.fillStyle = color;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(text, bx + 3, y);
+        ctx.fillText(text, bx + pad, y);
     }
 }

@@ -14,6 +14,7 @@ export class Viewport {
   // screen dimensions
   w = 800;
   h = 600;
+  dpr = 1;
 
   // volume panel occupies bottom fraction of canvas
   volFrac = 0.18;
@@ -23,7 +24,11 @@ export class Viewport {
   /** Volume panel height */
   get volH(): number { return this.h * this.volFrac; }
 
-  setSize(w: number, h: number): void { this.w = w; this.h = h; }
+  setSize(w: number, h: number, dpr = 1): void {
+    this.w = w;
+    this.h = h;
+    this.dpr = dpr;
+  }
 
   /** Number of visible bars */
   get visibleBars(): number { return this.xMax - this.xMin; }

@@ -7,6 +7,7 @@ export class PanZoom {
     onCrosshair;
     onCrosshairLeave;
     onAutoFollowChange;
+    isDrawingActive;
     dragging = false;
     draggingX = false;
     draggingY = false;
@@ -15,7 +16,7 @@ export class PanZoom {
     lastDragX = 0;
     lastDragY = 0;
     autoFollow = true;
-    constructor(el, yAxisEl, xAxisEl, vp, onChange, onCrosshair, onCrosshairLeave, onAutoFollowChange) {
+    constructor(el, yAxisEl, xAxisEl, vp, onChange, onCrosshair, onCrosshairLeave, onAutoFollowChange, isDrawingActive) {
         this.el = el;
         this.yAxisEl = yAxisEl;
         this.xAxisEl = xAxisEl;
@@ -24,6 +25,7 @@ export class PanZoom {
         this.onCrosshair = onCrosshair;
         this.onCrosshairLeave = onCrosshairLeave;
         this.onAutoFollowChange = onAutoFollowChange;
+        this.isDrawingActive = isDrawingActive;
         this.bindMouse();
         this.bindXAxis();
         this.bindYAxis();
@@ -43,6 +45,8 @@ export class PanZoom {
         this.el.addEventListener('mousedown', (e) => {
             if (e.button !== 0 && e.button !== 1)
                 return;
+            if (this.isDrawingActive?.())
+                return; // Don't pan if drawing tool is active
             this.dragging = true;
             this.lastX = e.clientX;
             this.lastY = e.clientY;
@@ -65,7 +69,7 @@ export class PanZoom {
                 this.onChange();
             }
             else if (!this.draggingX && !this.draggingY) {
-                // crosshair position
+                // Crosshair position
                 const rect = this.el.getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
@@ -81,7 +85,7 @@ export class PanZoom {
         window.addEventListener('mouseup', () => {
             if (this.dragging) {
                 this.dragging = false;
-                this.el.style.cursor = 'crosshair';
+                this.el.style.cursor = this.isDrawingActive?.() ? 'crosshair' : 'default';
             }
         });
         this.el.addEventListener('mouseleave', () => {
@@ -215,7 +219,7 @@ export class PanZoom {
             const rect = this.el.getBoundingClientRect();
             const dpr = window.devicePixelRatio || 1;
             const px = (e.clientX - rect.left) * dpr;
-            // zoom X (number of visible bars)
+            // Zoom X centered on cursor
             const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
             this.vp.zoom(factor, px);
             this.setFollow(false);
@@ -225,6 +229,10 @@ export class PanZoom {
     bindTouch() {
         let lastTouches = [];
         this.el.addEventListener('touchstart', (e) => {
+            if (this.isDrawingActive?.()) {
+                // If drawing tool active, let drawing handler take over
+                return;
+            }
             e.preventDefault();
             lastTouches = Array.from(e.touches);
             const dpr = window.devicePixelRatio || 1;
@@ -234,6 +242,8 @@ export class PanZoom {
             }
         }, { passive: false });
         this.el.addEventListener('touchmove', (e) => {
+            if (this.isDrawingActive?.())
+                return;
             e.preventDefault();
             const cur = Array.from(e.touches);
             const dpr = window.devicePixelRatio || 1;
@@ -266,6 +276,8 @@ export class PanZoom {
             lastTouches = cur;
         }, { passive: false });
         this.el.addEventListener('touchend', (e) => {
+            if (this.isDrawingActive?.())
+                return;
             if (e.touches.length === 0) {
                 lastTouches = [];
                 this.onCrosshairLeave();
