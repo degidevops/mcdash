@@ -17,7 +17,8 @@ cargo build --release --bin mcdash
 - Phase 1: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
 - Phase 2: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
 - Phase 3: TPO Overlay + Level Lines (✅ Selesai)
-- Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect) ← **SELANJUTNYA**
+- Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect) (✅ Selesai)
+- Phase 5: Polish (mobile, shortcuts, export) ← **SELANJUTNYA**
 - Arsitektur: Hybrid WebGL2 + Canvas 2D
 - Proposal lengkap: `.agents/docs/chart-proposal.md`
 - Bahasa respons: **Bahasa Indonesia**

@@ -1,0 +1,600 @@
+// Drawing Tools — Models, Storage, Hit Testing, and Canvas 2D Overlay Rendering
+// Part of Phase 4: Professional Trading Chart (ATAS / DeepChart style)
+export const FIB_LEVELS = [
+    { ratio: 0.0, label: '0.0%', color: '#787B86' },
+    { ratio: 0.236, label: '23.6%', color: '#F23645', tint: 'rgba(242, 54, 69, 0.08)' },
+    { ratio: 0.382, label: '38.2%', color: '#FF9800', tint: 'rgba(255, 152, 0, 0.08)' },
+    { ratio: 0.5, label: '50.0%', color: '#4CAF50', tint: 'rgba(76, 175, 80, 0.08)' },
+    { ratio: 0.618, label: '61.8%', color: '#089981', tint: 'rgba(8, 153, 129, 0.08)' },
+    { ratio: 0.786, label: '78.6%', color: '#00BCD4', tint: 'rgba(0, 188, 212, 0.08)' },
+    { ratio: 1.0, label: '100.0%', color: '#787B86' },
+];
+const HANDLE_RADIUS = 4.5;
+const HANDLE_HIT_RADIUS = 8;
+const LINE_HIT_TOLERANCE = 6;
+/** Convert hex or rgb color to rgba with given alpha */
+export function colorWithAlpha(color, alpha) {
+    if (color.startsWith('#')) {
+        let c = color.slice(1);
+        if (c.length === 3) {
+            c = c.split('').map(x => x + x).join('');
+        }
+        if (c.length === 6) {
+            const num = parseInt(c, 16);
+            const r = (num >> 16) & 255;
+            const g = (num >> 8) & 255;
+            const b = num & 255;
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+    }
+    if (color.startsWith('rgb(')) {
+        return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+    }
+    return color;
+}
+/** Distance from point (px, py) to line segment (x1, y1)-(x2, y2) */
+export function distToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const l2 = dx * dx + dy * dy;
+    if (l2 === 0)
+        return Math.hypot(px - x1, py - y1);
+    let t = ((px - x1) * dx + (py - y1) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+/** Convert unix timestamp in seconds to screen X coordinate */
+export function timeToScreenX(timeSec, vp, bars) {
+    const n = bars.len;
+    if (n === 0)
+        return 0;
+    if (n === 1)
+        return vp.xToScreen(0);
+    const times = bars.t;
+    // Outside left
+    if (timeSec < times[0]) {
+        const dt = times[1] - times[0] || 60;
+        const offsetBars = (timeSec - times[0]) / dt;
+        return vp.xToScreen(offsetBars);
+    }
+    // Outside right
+    if (timeSec > times[n - 1]) {
+        const dt = (times[n - 1] - times[0]) / (n - 1) || 60;
+        const offsetBars = (timeSec - times[n - 1]) / dt;
+        return vp.xToScreen(n - 1 + offsetBars);
+    }
+    // Binary search for exact or surrounding bars
+    let lo = 0;
+    let hi = n - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (times[mid] === timeSec) {
+            return vp.xToScreen(mid);
+        }
+        if (times[mid] < timeSec) {
+            lo = mid + 1;
+        }
+        else {
+            hi = mid - 1;
+        }
+    }
+    const idx0 = Math.max(0, hi);
+    const idx1 = Math.min(n - 1, lo);
+    if (idx0 === idx1)
+        return vp.xToScreen(idx0);
+    const t0 = times[idx0];
+    const t1 = times[idx1];
+    const frac = t1 > t0 ? (timeSec - t0) / (t1 - t0) : 0;
+    return vp.xToScreen(idx0 + frac);
+}
+/** Convert screen X coordinate to unix timestamp in seconds */
+export function screenXToTime(screenX, vp, bars) {
+    const barIdx = vp.screenToX(screenX);
+    const n = bars.len;
+    if (n === 0)
+        return Math.floor(Date.now() / 1000);
+    if (n === 1)
+        return bars.t[0];
+    if (barIdx <= 0) {
+        const dt = bars.t[1] - bars.t[0] || 60;
+        return bars.t[0] + barIdx * dt;
+    }
+    if (barIdx >= n - 1) {
+        const dt = (bars.t[n - 1] - bars.t[0]) / (n - 1) || 60;
+        return bars.t[n - 1] + (barIdx - (n - 1)) * dt;
+    }
+    const i0 = Math.floor(barIdx);
+    const frac = barIdx - i0;
+    const t0 = bars.t[i0];
+    const t1 = bars.t[i0 + 1];
+    return t0 + frac * (t1 - t0);
+}
+/** Factory helper to instantiate a new Drawing */
+export function createDrawing(type, points, style) {
+    return {
+        id: 'd_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+        type,
+        points,
+        style: {
+            color: style?.color ?? '#2962FF',
+            width: style?.width ?? 2,
+            ...(style?.dash ? { dash: style.dash } : {}),
+        },
+        visible: true,
+        locked: false,
+    };
+}
+export class DrawingStore {
+    drawings = [];
+    activeTool = null;
+    selectedId = null;
+    pendingPoints = [];
+    previewPoint = null;
+    defaultStyle = {
+        color: '#2962FF',
+        width: 2,
+    };
+    addDrawing(drawing) {
+        this.drawings.push(drawing);
+    }
+    removeDrawing(id) {
+        const idx = this.drawings.findIndex(d => d.id === id);
+        if (idx !== -1) {
+            this.drawings.splice(idx, 1);
+            if (this.selectedId === id) {
+                this.selectedId = null;
+            }
+        }
+    }
+    updateDrawing(id, update) {
+        const d = this.getDrawing(id);
+        if (d) {
+            Object.assign(d, update);
+        }
+    }
+    getDrawing(id) {
+        return this.drawings.find(d => d.id === id);
+    }
+    clearAll() {
+        this.drawings = [];
+        this.selectedId = null;
+        this.pendingPoints = [];
+        this.previewPoint = null;
+    }
+    setSelected(id) {
+        this.selectedId = id;
+    }
+    setActiveTool(tool) {
+        this.activeTool = tool;
+        this.pendingPoints = [];
+        this.previewPoint = null;
+    }
+    cancelPending() {
+        this.pendingPoints = [];
+        this.previewPoint = null;
+    }
+    /**
+     * Hit test a screen coordinate against existing drawings.
+     * Checks handles of selected drawing first, then other handles, then bodies.
+     */
+    hitTest(screenX, screenY, vp, bars) {
+        if (bars.len === 0 || this.drawings.length === 0)
+            return null;
+        // 1. Check handles of selected drawing first (priority for resizing)
+        if (this.selectedId) {
+            const sel = this.getDrawing(this.selectedId);
+            if (sel && sel.visible && !sel.locked) {
+                for (let i = 0; i < sel.points.length; i++) {
+                    const pt = sel.points[i];
+                    const px = timeToScreenX(pt.time, vp, bars);
+                    const py = vp.yToScreen(pt.price);
+                    if (Math.hypot(screenX - px, screenY - py) <= HANDLE_HIT_RADIUS) {
+                        return { drawing: sel, hitType: 'point', pointIndex: i };
+                    }
+                }
+            }
+        }
+        // 2. Check handles of all visible drawings (top-down in z-order)
+        for (let i = this.drawings.length - 1; i >= 0; i--) {
+            const d = this.drawings[i];
+            if (!d.visible || d.locked)
+                continue;
+            for (let pIdx = 0; pIdx < d.points.length; pIdx++) {
+                const pt = d.points[pIdx];
+                const px = timeToScreenX(pt.time, vp, bars);
+                const py = vp.yToScreen(pt.price);
+                if (Math.hypot(screenX - px, screenY - py) <= HANDLE_HIT_RADIUS) {
+                    return { drawing: d, hitType: 'point', pointIndex: pIdx };
+                }
+            }
+        }
+        // 3. Check drawing bodies (top-down in z-order)
+        for (let i = this.drawings.length - 1; i >= 0; i--) {
+            const d = this.drawings[i];
+            if (!d.visible)
+                continue;
+            if (d.type === 'hline') {
+                if (d.points.length < 1)
+                    continue;
+                const py = vp.yToScreen(d.points[0].price);
+                if (Math.abs(screenY - py) <= LINE_HIT_TOLERANCE && screenX >= 0 && screenX <= vp.w) {
+                    return { drawing: d, hitType: 'body' };
+                }
+            }
+            else if (d.type === 'trendline') {
+                if (d.points.length < 2)
+                    continue;
+                const x1 = timeToScreenX(d.points[0].time, vp, bars);
+                const y1 = vp.yToScreen(d.points[0].price);
+                const x2 = timeToScreenX(d.points[1].time, vp, bars);
+                const y2 = vp.yToScreen(d.points[1].price);
+                if (distToSegment(screenX, screenY, x1, y1, x2, y2) <= LINE_HIT_TOLERANCE) {
+                    return { drawing: d, hitType: 'body' };
+                }
+            }
+            else if (d.type === 'rectangle') {
+                if (d.points.length < 2)
+                    continue;
+                const x1 = timeToScreenX(d.points[0].time, vp, bars);
+                const y1 = vp.yToScreen(d.points[0].price);
+                const x2 = timeToScreenX(d.points[1].time, vp, bars);
+                const y2 = vp.yToScreen(d.points[1].price);
+                const minX = Math.min(x1, x2);
+                const maxX = Math.max(x1, x2);
+                const minY = Math.min(y1, y2);
+                const maxY = Math.max(y1, y2);
+                // Check inside rect
+                if (screenX >= minX - 3 && screenX <= maxX + 3 &&
+                    screenY >= minY - 3 && screenY <= maxY + 3) {
+                    return { drawing: d, hitType: 'body' };
+                }
+                // Check edges with tolerance
+                if (distToSegment(screenX, screenY, minX, minY, maxX, minY) <= LINE_HIT_TOLERANCE ||
+                    distToSegment(screenX, screenY, maxX, minY, maxX, maxY) <= LINE_HIT_TOLERANCE ||
+                    distToSegment(screenX, screenY, maxX, maxY, minX, maxY) <= LINE_HIT_TOLERANCE ||
+                    distToSegment(screenX, screenY, minX, maxY, minX, minY) <= LINE_HIT_TOLERANCE) {
+                    return { drawing: d, hitType: 'body' };
+                }
+            }
+            else if (d.type === 'fibonacci') {
+                if (d.points.length < 2)
+                    continue;
+                const p1 = d.points[0];
+                const p2 = d.points[1];
+                const x1 = timeToScreenX(p1.time, vp, bars);
+                const y1 = vp.yToScreen(p1.price);
+                const x2 = timeToScreenX(p2.time, vp, bars);
+                const y2 = vp.yToScreen(p2.price);
+                // Check trendline connecting point 1 and 2
+                if (distToSegment(screenX, screenY, x1, y1, x2, y2) <= LINE_HIT_TOLERANCE) {
+                    return { drawing: d, hitType: 'body' };
+                }
+                const minX = Math.min(x1, x2);
+                const maxX = Math.max(x1, x2);
+                const lineStart = Math.min(minX, 0);
+                const lineEnd = Math.max(maxX, vp.w);
+                // Check horizontal level lines
+                const priceDiff = p1.price - p2.price;
+                for (const level of FIB_LEVELS) {
+                    const lvlPrice = p2.price + level.ratio * priceDiff;
+                    const lvlY = vp.yToScreen(lvlPrice);
+                    if (distToSegment(screenX, screenY, minX, lvlY, maxX, lvlY) <= LINE_HIT_TOLERANCE) {
+                        return { drawing: d, hitType: 'body' };
+                    }
+                }
+                // Inside fibonacci bounding box
+                const minY = Math.min(y1, y2);
+                const maxY = Math.max(y1, y2);
+                if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
+                    return { drawing: d, hitType: 'body' };
+                }
+            }
+        }
+        return null;
+    }
+    saveToStorage(symbol) {
+        try {
+            const key = `mcdash_chart_drawings_${symbol.toUpperCase()}`;
+            localStorage.setItem(key, JSON.stringify(this.drawings));
+        }
+        catch (e) {
+            console.warn('Failed to save drawings to localStorage:', e);
+        }
+    }
+    loadFromStorage(symbol) {
+        try {
+            const key = `mcdash_chart_drawings_${symbol.toUpperCase()}`;
+            const raw = localStorage.getItem(key);
+            if (!raw)
+                return;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                this.drawings = parsed.filter(d => (d &&
+                    typeof d.id === 'string' &&
+                    typeof d.type === 'string' &&
+                    Array.isArray(d.points)));
+            }
+        }
+        catch (e) {
+            console.warn('Failed to load drawings from localStorage:', e);
+            this.drawings = [];
+        }
+    }
+}
+export class DrawingRenderer {
+    draw(ctx, vp, bars, store) {
+        if (bars.len === 0)
+            return;
+        ctx.save();
+        // Restrict drawing to chart area above volume panel
+        ctx.beginPath();
+        ctx.rect(0, 0, vp.w, vp.chartH);
+        ctx.clip();
+        // 1. Draw finalized drawings
+        for (const drawing of store.drawings) {
+            if (!drawing.visible)
+                continue;
+            const isSelected = drawing.id === store.selectedId;
+            switch (drawing.type) {
+                case 'trendline':
+                    this.drawTrendline(ctx, vp, bars, drawing, isSelected);
+                    break;
+                case 'hline':
+                    this.drawHLine(ctx, vp, bars, drawing, isSelected);
+                    break;
+                case 'fibonacci':
+                    this.drawFibonacci(ctx, vp, bars, drawing, isSelected);
+                    break;
+                case 'rectangle':
+                    this.drawRectangle(ctx, vp, bars, drawing, isSelected);
+                    break;
+            }
+        }
+        // 2. Draw preview during creation
+        this.drawCreationPreview(ctx, vp, bars, store);
+        ctx.restore();
+    }
+    drawHandle(ctx, x, y, color = '#2962FF') {
+        ctx.save();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, HANDLE_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    }
+    drawTrendline(ctx, vp, bars, drawing, isSelected) {
+        if (drawing.points.length < 2)
+            return;
+        const x1 = timeToScreenX(drawing.points[0].time, vp, bars);
+        const y1 = vp.yToScreen(drawing.points[0].price);
+        const x2 = timeToScreenX(drawing.points[1].time, vp, bars);
+        const y2 = vp.yToScreen(drawing.points[1].price);
+        ctx.save();
+        ctx.strokeStyle = drawing.style.color;
+        ctx.lineWidth = drawing.style.width;
+        if (drawing.style.dash && drawing.style.dash.length > 0) {
+            ctx.setLineDash(drawing.style.dash);
+        }
+        else {
+            ctx.setLineDash([]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.restore();
+        if (isSelected) {
+            this.drawHandle(ctx, x1, y1, drawing.style.color);
+            this.drawHandle(ctx, x2, y2, drawing.style.color);
+        }
+    }
+    drawHLine(ctx, vp, bars, drawing, isSelected) {
+        if (drawing.points.length < 1)
+            return;
+        const price = drawing.points[0].price;
+        const y = vp.yToScreen(price);
+        const x1 = drawing.points[0].time ? timeToScreenX(drawing.points[0].time, vp, bars) : vp.w / 2;
+        ctx.save();
+        ctx.strokeStyle = drawing.style.color;
+        ctx.lineWidth = drawing.style.width;
+        if (drawing.style.dash && drawing.style.dash.length > 0) {
+            ctx.setLineDash(drawing.style.dash);
+        }
+        else {
+            ctx.setLineDash([]);
+        }
+        // Full horizontal line across chart
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(vp.w, y);
+        ctx.stroke();
+        ctx.restore();
+        // Price badge on the right
+        ctx.save();
+        const label = price.toFixed(2);
+        ctx.font = '10px ui-monospace,SFMono-Regular,monospace';
+        const textW = ctx.measureText(label).width;
+        const badgeW = textW + 10;
+        const badgeH = 18;
+        const badgeX = vp.w - badgeW - 4;
+        const badgeY = y - badgeH / 2;
+        ctx.fillStyle = drawing.style.color;
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
+        ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, badgeX + badgeW / 2, y);
+        ctx.restore();
+        if (isSelected) {
+            const handleX = Math.max(20, Math.min(vp.w - 40, x1));
+            this.drawHandle(ctx, handleX, y, drawing.style.color);
+        }
+    }
+    drawFibonacci(ctx, vp, bars, drawing, isSelected) {
+        if (drawing.points.length < 2)
+            return;
+        const p1 = drawing.points[0];
+        const p2 = drawing.points[1];
+        const x1 = timeToScreenX(p1.time, vp, bars);
+        const y1 = vp.yToScreen(p1.price);
+        const x2 = timeToScreenX(p2.time, vp, bars);
+        const y2 = vp.yToScreen(p2.price);
+        const minX = Math.min(x1, x2);
+        const maxX = Math.max(x1, x2);
+        const width = Math.max(maxX - minX, 60);
+        // Diagonal reference line between Point 1 and Point 2
+        ctx.save();
+        ctx.strokeStyle = colorWithAlpha(drawing.style.color, 0.4);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.restore();
+        const priceDiff = p1.price - p2.price;
+        // Calculate level positions
+        const levelsCalculated = FIB_LEVELS.map(lvl => {
+            const price = p2.price + lvl.ratio * priceDiff;
+            const y = vp.yToScreen(price);
+            return { ...lvl, price, y };
+        });
+        // Draw background tints between adjacent key levels
+        ctx.save();
+        for (let i = 0; i < levelsCalculated.length - 1; i++) {
+            const lvlA = levelsCalculated[i];
+            const lvlB = levelsCalculated[i + 1];
+            const tint = lvlB.tint ?? 'rgba(255, 255, 255, 0.03)';
+            const topY = Math.min(lvlA.y, lvlB.y);
+            const height = Math.abs(lvlA.y - lvlB.y);
+            ctx.fillStyle = tint;
+            ctx.fillRect(minX, topY, width, height);
+        }
+        ctx.restore();
+        // Draw horizontal lines and level text labels
+        ctx.save();
+        ctx.font = '10px ui-monospace,SFMono-Regular,monospace';
+        ctx.textBaseline = 'bottom';
+        for (const lvl of levelsCalculated) {
+            // Horizontal level line
+            ctx.strokeStyle = lvl.color;
+            ctx.lineWidth = 1;
+            ctx.setLineDash(lvl.ratio === 0 || lvl.ratio === 1 ? [] : [2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(minX, lvl.y);
+            ctx.lineTo(minX + width, lvl.y);
+            ctx.stroke();
+            // Label: e.g. "61.8% (2745.20)"
+            const text = `${lvl.label} (${lvl.price.toFixed(2)})`;
+            ctx.fillStyle = lvl.color;
+            ctx.textAlign = 'left';
+            ctx.fillText(text, minX + 4, lvl.y - 2);
+        }
+        ctx.restore();
+        if (isSelected) {
+            this.drawHandle(ctx, x1, y1, drawing.style.color);
+            this.drawHandle(ctx, x2, y2, drawing.style.color);
+        }
+    }
+    drawRectangle(ctx, vp, bars, drawing, isSelected) {
+        if (drawing.points.length < 2)
+            return;
+        const x1 = timeToScreenX(drawing.points[0].time, vp, bars);
+        const y1 = vp.yToScreen(drawing.points[0].price);
+        const x2 = timeToScreenX(drawing.points[1].time, vp, bars);
+        const y2 = vp.yToScreen(drawing.points[1].price);
+        const rx = Math.min(x1, x2);
+        const ry = Math.min(y1, y2);
+        const rw = Math.max(1, Math.abs(x2 - x1));
+        const rh = Math.max(1, Math.abs(y2 - y1));
+        ctx.save();
+        // Semi-transparent fill
+        ctx.fillStyle = colorWithAlpha(drawing.style.color, 0.12);
+        ctx.fillRect(rx, ry, rw, rh);
+        // Border stroke
+        ctx.strokeStyle = drawing.style.color;
+        ctx.lineWidth = drawing.style.width;
+        if (drawing.style.dash && drawing.style.dash.length > 0) {
+            ctx.setLineDash(drawing.style.dash);
+        }
+        else {
+            ctx.setLineDash([]);
+        }
+        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.restore();
+        if (isSelected) {
+            this.drawHandle(ctx, x1, y1, drawing.style.color);
+            this.drawHandle(ctx, x2, y2, drawing.style.color);
+            this.drawHandle(ctx, x1, y2, drawing.style.color);
+            this.drawHandle(ctx, x2, y1, drawing.style.color);
+        }
+    }
+    drawCreationPreview(ctx, vp, bars, store) {
+        if (!store.activeTool || !store.previewPoint)
+            return;
+        if (store.activeTool === 'hline') {
+            const y = vp.yToScreen(store.previewPoint.price);
+            ctx.save();
+            ctx.strokeStyle = store.defaultStyle.color;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(vp.w, y);
+            ctx.stroke();
+            // Preview badge
+            const label = store.previewPoint.price.toFixed(2);
+            ctx.font = '10px ui-monospace,SFMono-Regular,monospace';
+            const textW = ctx.measureText(label).width;
+            const badgeW = textW + 10;
+            const badgeH = 18;
+            const badgeX = vp.w - badgeW - 4;
+            const badgeY = y - badgeH / 2;
+            ctx.fillStyle = store.defaultStyle.color;
+            ctx.beginPath();
+            ctx.roundRect ? ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 2) : ctx.rect(badgeX, badgeY, badgeW, badgeH);
+            ctx.fill();
+            ctx.fillStyle = '#FFFFFF';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, badgeX + badgeW / 2, y);
+            ctx.restore();
+            return;
+        }
+        if (store.pendingPoints.length === 1) {
+            const pt1 = store.pendingPoints[0];
+            const pt2 = store.previewPoint;
+            const previewDrawing = {
+                id: '__preview__',
+                type: store.activeTool,
+                points: [pt1, pt2],
+                style: { ...store.defaultStyle, dash: [4, 4] },
+                visible: true,
+                locked: false,
+            };
+            ctx.save();
+            ctx.globalAlpha = 0.75;
+            switch (store.activeTool) {
+                case 'trendline':
+                    this.drawTrendline(ctx, vp, bars, previewDrawing, false);
+                    break;
+                case 'rectangle':
+                    this.drawRectangle(ctx, vp, bars, previewDrawing, false);
+                    break;
+                case 'fibonacci':
+                    this.drawFibonacci(ctx, vp, bars, previewDrawing, false);
+                    break;
+            }
+            ctx.restore();
+            // Show handle at point 1
+            const x1 = timeToScreenX(pt1.time, vp, bars);
+            const y1 = vp.yToScreen(pt1.price);
+            this.drawHandle(ctx, x1, y1, store.defaultStyle.color);
+        }
+    }
+}

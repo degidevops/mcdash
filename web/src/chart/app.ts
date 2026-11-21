@@ -9,6 +9,13 @@ import { GridRenderer } from './grid.js';
 import { AxisRenderer } from './axis.js';
 import { CrosshairRenderer } from './crosshair.js';
 import { TpoRenderer } from './tpo.js';
+import {
+  DrawingStore,
+  DrawingRenderer,
+  createDrawing,
+  screenXToTime,
+} from './drawing.js';
+import type { DrawingType, DrawingPoint, DrawingStyle } from './drawing.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
 import { fmtPrice, fmtPct, decimalsOf } from './util.js';
@@ -29,6 +36,8 @@ export class ChartApp {
   private btnFollowEl!: HTMLElement;
   private btnTpoEl!: HTMLElement;
   private btnNPocEl!: HTMLElement;
+  private chartMainEl!: HTMLElement;
+  private btnClearDrawingsEl!: HTMLElement;
 
   private glCtx!: GLCtx;
   private vp = new Viewport();
@@ -40,8 +49,22 @@ export class ChartApp {
   private axis = new AxisRenderer();
   private crosshair = new CrosshairRenderer();
   private tpo = new TpoRenderer();
+  private drawingStore = new DrawingStore();
+  private drawingRenderer = new DrawingRenderer();
   private panzoom!: PanZoom;
   private client!: ChartClient;
+
+  private symbol = 'XAUUSDT';
+  private draggingDrawing: {
+    drawingId: string;
+    hitType: 'point' | 'body';
+    pointIndex?: number;
+    startPoint: DrawingPoint;
+    startPoints: DrawingPoint[];
+    startScreenX: number;
+    startScreenY: number;
+    moved: boolean;
+  } | null = null;
 
   private tf = 60; // current timeframe in minutes
   private tickSize = 0.01;
@@ -66,6 +89,13 @@ export class ChartApp {
     this.btnFollowEl = document.getElementById('btnFollow')!;
     this.btnTpoEl = document.getElementById('btnTpo')!;
     this.btnNPocEl = document.getElementById('btnNPoc')!;
+    this.chartMainEl = document.getElementById('chartMain')!;
+    this.btnClearDrawingsEl = document.getElementById('btnClearDrawings')!;
+
+    // Drawing storage & interaction
+    this.drawingStore.loadFromStorage(this.symbol);
+    this.bindDrawingUI();
+    this.bindDrawingMouse();
 
     // WebGL context first
     this.glCtx = initGL(this.glCanvas);
@@ -216,8 +246,246 @@ export class ChartApp {
           this.markDirty();
           break;
         }
+        case 't':
+        case 'T':
+          this.setTool('trendline');
+          break;
+        case 'h':
+        case 'H':
+          this.setTool('hline');
+          break;
+        case 'f':
+        case 'F':
+          this.setTool('fibonacci');
+          break;
+        case 'r':
+        case 'R':
+          this.setTool('rectangle');
+          break;
+        case 'v':
+        case 'V':
+          this.setTool(null);
+          break;
+        case 'Escape':
+          if (this.drawingStore.activeTool || this.drawingStore.pendingPoints.length > 0) {
+            this.setTool(null);
+          } else if (this.drawingStore.selectedId) {
+            this.drawingStore.setSelected(null);
+            this.markDirty();
+          }
+          break;
+        case 'Delete':
+        case 'Backspace':
+          if (this.drawingStore.selectedId) {
+            this.drawingStore.removeDrawing(this.drawingStore.selectedId);
+            this.drawingStore.saveToStorage(this.symbol);
+            this.markDirty();
+          }
+          break;
       }
     });
+  }
+
+  private bindDrawingUI(): void {
+    const toolbar = document.getElementById('drawToolbar');
+    if (toolbar) {
+      toolbar.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest('.dt-btn') as HTMLElement;
+        if (!btn) return;
+        const tool = btn.dataset['tool'];
+        if (tool === 'select') {
+          this.setTool(null);
+        } else if (tool) {
+          this.setTool(tool as DrawingType);
+        }
+      });
+    }
+
+    if (this.btnClearDrawingsEl) {
+      this.btnClearDrawingsEl.addEventListener('click', () => {
+        this.drawingStore.clearAll();
+        this.drawingStore.saveToStorage(this.symbol);
+        this.setTool(null);
+        this.markDirty();
+      });
+    }
+  }
+
+  private setTool(tool: DrawingType | null): void {
+    this.drawingStore.cancelPending();
+    this.drawingStore.setActiveTool(tool);
+    this.updateToolbarUI();
+    if (this.chartMainEl) {
+      this.chartMainEl.style.cursor = 'crosshair';
+    }
+    this.markDirty();
+  }
+
+  private updateToolbarUI(): void {
+    const active = this.drawingStore.activeTool;
+    const buttons = document.querySelectorAll('#drawToolbar .dt-btn[data-tool]');
+    buttons.forEach(btn => {
+      const tool = (btn as HTMLElement).dataset['tool'];
+      if (!active && tool === 'select') {
+        btn.classList.add('on');
+      } else if (active && tool === active) {
+        btn.classList.add('on');
+      } else {
+        btn.classList.remove('on');
+      }
+    });
+  }
+
+  private bindDrawingMouse(): void {
+    this.chartMainEl.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const rect = this.chartMainEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const screenX = (e.clientX - rect.left) * dpr;
+      const screenY = (e.clientY - rect.top) * dpr;
+
+      if (screenY > this.vp.chartH) return;
+
+      const price = this.vp.screenToY(screenY);
+      const time = screenXToTime(screenX, this.vp, this.bars);
+
+      if (this.drawingStore.activeTool) {
+        e.stopPropagation();
+        this.handleToolMouseDown(screenX, screenY, time, price);
+        return;
+      }
+
+      const hit = this.drawingStore.hitTest(screenX, screenY, this.vp, this.bars);
+      if (hit) {
+        e.stopPropagation();
+        this.drawingStore.setSelected(hit.drawing.id);
+        this.draggingDrawing = {
+          drawingId: hit.drawing.id,
+          hitType: hit.hitType,
+          pointIndex: hit.pointIndex,
+          startPoint: { time, price },
+          startPoints: hit.drawing.points.map(p => ({ ...p })),
+          startScreenX: screenX,
+          startScreenY: screenY,
+          moved: false,
+        };
+        this.markDirty();
+        return;
+      }
+
+      if (this.drawingStore.selectedId) {
+        this.drawingStore.setSelected(null);
+        this.markDirty();
+      }
+    }, true);
+
+    window.addEventListener('mousemove', (e: MouseEvent) => {
+      const rect = this.chartMainEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const screenX = (e.clientX - rect.left) * dpr;
+      const screenY = (e.clientY - rect.top) * dpr;
+      const isInside = screenX >= 0 && screenX <= rect.width * dpr && screenY >= 0 && screenY <= rect.height * dpr;
+
+      const price = this.vp.screenToY(screenY);
+      const time = screenXToTime(screenX, this.vp, this.bars);
+
+      if (this.draggingDrawing) {
+        const d = this.drawingStore.getDrawing(this.draggingDrawing.drawingId);
+        if (d && !d.locked) {
+          if (this.draggingDrawing.hitType === 'point' && this.draggingDrawing.pointIndex !== undefined) {
+            if (d.points[this.draggingDrawing.pointIndex]) {
+              d.points[this.draggingDrawing.pointIndex] = { time, price };
+              this.draggingDrawing.moved = true;
+              this.markDirty();
+            }
+          } else if (this.draggingDrawing.hitType === 'body') {
+            const dt = time - this.draggingDrawing.startPoint.time;
+            const dp = price - this.draggingDrawing.startPoint.price;
+            for (let i = 0; i < d.points.length; i++) {
+              d.points[i] = {
+                time: this.draggingDrawing.startPoints[i].time + dt,
+                price: this.draggingDrawing.startPoints[i].price + dp,
+              };
+            }
+            this.draggingDrawing.moved = true;
+            this.markDirty();
+          }
+        }
+        return;
+      }
+
+      if (this.drawingStore.activeTool) {
+        if (isInside && screenY <= this.vp.chartH) {
+          this.drawingStore.previewPoint = { time, price };
+          this.markDirty();
+        }
+        return;
+      }
+
+      if (isInside && screenY <= this.vp.chartH) {
+        const hit = this.drawingStore.hitTest(screenX, screenY, this.vp, this.bars);
+        if (hit) {
+          this.chartMainEl.style.cursor = hit.hitType === 'point' ? 'pointer' : 'move';
+        } else {
+          this.chartMainEl.style.cursor = 'crosshair';
+        }
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (this.draggingDrawing) {
+        if (this.draggingDrawing.moved) {
+          this.drawingStore.saveToStorage(this.symbol);
+        }
+        this.draggingDrawing = null;
+      }
+    });
+  }
+
+  private handleToolMouseDown(_screenX: number, _screenY: number, time: number, price: number): void {
+    const tool = this.drawingStore.activeTool;
+    if (!tool) return;
+
+    if (tool === 'hline') {
+      const drawing = createDrawing('hline', [{ time, price }], {
+        color: '#787B86',
+        width: 1.5,
+        dash: [4, 4],
+      });
+      this.drawingStore.addDrawing(drawing);
+      this.drawingStore.setSelected(drawing.id);
+      this.drawingStore.cancelPending();
+      this.setTool(null);
+      this.drawingStore.saveToStorage(this.symbol);
+      this.markDirty();
+      return;
+    }
+
+    if (this.drawingStore.pendingPoints.length === 0) {
+      this.drawingStore.pendingPoints = [{ time, price }];
+      this.drawingStore.previewPoint = { time, price };
+      this.markDirty();
+    } else if (this.drawingStore.pendingPoints.length === 1) {
+      const p1 = this.drawingStore.pendingPoints[0];
+      const p2 = { time, price };
+
+      let style: Partial<DrawingStyle> = { color: '#2962FF', width: 2 };
+      if (tool === 'fibonacci') {
+        style = { color: '#9C27B0', width: 1 };
+      } else if (tool === 'rectangle') {
+        style = { color: '#2962FF', width: 1.5 };
+      } else if (tool === 'trendline') {
+        style = { color: '#2962FF', width: 2 };
+      }
+
+      const drawing = createDrawing(tool, [p1, p2], style);
+      this.drawingStore.addDrawing(drawing);
+      this.drawingStore.setSelected(drawing.id);
+      this.drawingStore.cancelPending();
+      this.setTool(null);
+      this.drawingStore.saveToStorage(this.symbol);
+      this.markDirty();
+    }
   }
 
   private resetToLive(): void {
@@ -365,6 +633,9 @@ export class ChartApp {
 
     // Draw TPO overlay (blocks, level lines, separators, nPOC)
     this.tpo.draw(this.ovCtx, vp, bars);
+
+    // Draw user drawings
+    this.drawingRenderer.draw(this.ovCtx, vp, bars, this.drawingStore);
 
     // Draw crosshair on overlay
     crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);

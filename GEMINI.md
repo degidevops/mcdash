@@ -104,8 +104,8 @@ mcdash/
   1. Phase 1: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
   2. Phase 2: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
   3. Phase 3: TPO Overlay + Level Lines (✅ Selesai)
-  4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect) ← **SELANJUTNYA**
-  5. Phase 5: Polish (mobile, shortcuts, export)
+  4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect) (✅ Selesai)
+  5. Phase 5: Polish (mobile, shortcuts, export) ← **SELANJUTNYA**
 
 **Fitur utama yang diminta**:
 - Candlestick chart + Volume bars + TPO/Market Profile overlay (gaya ATAS)
