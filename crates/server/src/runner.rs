@@ -168,6 +168,11 @@ impl Runner {
         if cfg.atr_feed_tf > 0 && !needed.contains(&cfg.atr_feed_tf) {
             needed.push(cfg.atr_feed_tf);
         }
+        for &ctf in &[15, 60] {
+            if !needed.contains(&ctf) {
+                needed.push(ctf);
+            }
+        }
         self.engine = Some(self.make_engine(&cfg, &self.symbol.clone())?);
         match cfg.source.kind {
             SourceKind::TradingView | SourceKind::Binance => self.sync_tv(&cfg, &needed),
@@ -288,7 +293,7 @@ impl Runner {
             return;
         }
         for tf in due {
-            if !self.tv.contains_key(&tf) && self.engine.as_ref().map_or(false, |e| e.needed_tfs().contains(&tf) || cfg.atr_feed_tf == tf) {
+            if !self.tv.contains_key(&tf) && (self.engine.as_ref().map_or(false, |e| e.needed_tfs().contains(&tf) || cfg.atr_feed_tf == tf) || tf == 15 || tf == 60) {
                 self.start_tv(tf, cfg.history_bars, &cfg.source);
             }
         }

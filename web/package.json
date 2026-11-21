@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Klien web dashboard TPO (TypeScript). Di-compile ke dist/*.js (ES module) lalu disajikan server Rust. Compiler: tsc (bawaan) atau tsrs (opsional).",
   "scripts": {
-    "build": "tsc -p . && node -e \"require('fs').copyFileSync('index.html','dist/index.html')\"",
+    "build": "tsc -p . && node -e \"require('fs').copyFileSync('index.html','dist/index.html'); require('fs').copyFileSync('chart.html','dist/chart.html')\"",
     "watch": "tsc -p . --watch",
     "typecheck": "tsc -p . --noEmit",
     "build:tsrs": "tsrs -p . && node -e \"require('fs').copyFileSync('index.html','dist/index.html')\"",

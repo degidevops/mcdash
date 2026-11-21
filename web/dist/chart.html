@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#131722">
+<title>MCDash Chart</title>
+<style>
+:root{
+  --bg:#131722;--bg2:#1E222D;--pn:#1a1e2e;--bd:#2A2E39;--bd2:#363A45;
+  --tx:#D1D4DC;--mu:#787B86;--dim:#4d5b6b;
+  --bull:#26A69A;--bear:#EF5350;--grid:#2A2E39;--grid2:#363A45;
+  --poc:#FF5252;--vah:#FFD700;--val:#FFD700;--va-fill:rgba(26,35,126,0.19);
+  --cur:#2962FF;--xh:#9598A1;
+  --mono:ui-monospace,SFMono-Regular,"JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums;user-select:none}
+
+/* header */
+.hd{display:flex;align-items:center;gap:8px;padding:4px 10px;background:var(--bg2);border-bottom:1px solid var(--bd);height:36px;flex-shrink:0}
+.sym{font-weight:800;color:var(--mu);font-size:13px}
+.px{font-size:18px;font-weight:800;padding:0 6px;border-radius:3px;min-width:90px}
+.px.up{color:var(--bull)}.px.dn{color:var(--bear)}
+.chg{font-size:11px;min-width:60px}
+.sep{width:1px;height:20px;background:var(--bd)}
+.tf{display:flex;gap:2px}
+.tf button{background:none;border:1px solid transparent;color:var(--mu);padding:3px 8px;border-radius:3px;cursor:pointer;font:600 11px var(--mono);letter-spacing:.04em}
+.tf button:hover{color:var(--tx);border-color:var(--bd2)}
+.tf button.on{color:var(--cur);border-color:var(--cur)}
+.sp{margin-left:auto;display:flex;gap:6px;align-items:center}
+.sp a,.sp button{color:var(--mu);text-decoration:none;font:600 11px var(--mono);letter-spacing:.06em;background:none;border:1px solid var(--bd2);padding:3px 10px;border-radius:3px;cursor:pointer}
+.sp a:hover,.sp button:hover{color:var(--tx);border-color:var(--tx)}
+#dot{width:7px;height:7px;border-radius:50%;background:var(--bear)}
+#dot.ok{background:var(--bull)}
+
+/* chart container */
+.chart-wrap{flex:1;display:flex;position:relative;overflow:hidden}
+.chart-main{flex:1;position:relative}
+.chart-main canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+#glCanvas{z-index:1}
+#ovCanvas{z-index:2;pointer-events:none}
+
+/* y-axis */
+.y-axis{width:72px;background:var(--bg2);border-left:1px solid var(--bd);position:relative;flex-shrink:0}
+.y-axis canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+
+/* x-axis */
+.x-axis{height:22px;background:var(--bg2);border-top:1px solid var(--bd);flex-shrink:0}
+.x-axis canvas{width:100%;height:100%}
+
+/* layout */
+.chart-body{display:flex;flex-direction:column;height:100vh}
+.chart-area{flex:1;display:flex;flex-direction:column;min-height:0}
+.chart-row{flex:1;display:flex;min-height:0}
+.x-row{display:flex}.x-row .x-axis{flex:1}.x-row .x-pad{width:72px;background:var(--bg2);border-left:1px solid var(--bd);border-top:1px solid var(--bd)}
+
+/* info box */
+.info{position:absolute;top:4px;left:8px;z-index:5;font-size:11px;color:var(--mu);pointer-events:none;display:flex;gap:12px}
+.info b{font-weight:700}.info .iv{color:var(--tx)}.info .up{color:var(--bull)}.info .dn{color:var(--bear)}
+
+/* status */
+.status{position:absolute;bottom:4px;left:8px;z-index:5;font-size:10px;color:var(--dim);pointer-events:none}
+</style>
+</head>
+<body>
+<div class="chart-body">
+  <header class="hd">
+    <span class="sym" id="sym">XAUUSDT</span>
+    <span class="px" id="px">–</span>
+    <span class="chg" id="chg"></span>
+    <div class="sep"></div>
+    <div class="tf" id="tf">
+      <button data-tf="1">1m</button>
+      <button data-tf="5">5m</button>
+      <button data-tf="15">15m</button>
+      <button data-tf="60" class="on">1H</button>
+      <button data-tf="240">4H</button>
+      <button data-tf="1440">D</button>
+    </div>
+    <span class="sp">
+      <span id="dot"></span>
+      <a href="/" title="Kembali ke Dashboard">Dashboard</a>
+    </span>
+  </header>
+  <div class="chart-area">
+    <div class="chart-row">
+      <div class="chart-main" id="chartMain">
+        <canvas id="glCanvas"></canvas>
+        <canvas id="ovCanvas"></canvas>
+        <div class="info" id="info"></div>
+        <div class="status" id="status"></div>
+      </div>
+      <div class="y-axis" id="yAxis"><canvas id="yCanvas"></canvas></div>
+    </div>
+    <div class="x-row">
+      <div class="x-axis"><canvas id="xCanvas"></canvas></div>
+      <div class="x-pad"></div>
+    </div>
+  </div>
+</div>
+<script type="module" src="/chart/index.js"></script>
+</body>
+</html>
