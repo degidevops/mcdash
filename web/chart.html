@@ -15,7 +15,7 @@
   --mono:ui-monospace,SFMono-Regular,"JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;background:var(--bg)}
+html,body{height:100%;height:100dvh;overflow:hidden;background:var(--bg)}
 body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums;user-select:none;-webkit-tap-highlight-color:transparent}
 
 /* header */
@@ -37,7 +37,7 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
 #dot.ok{background:var(--bull)}
 
 /* chart layout */
-.chart-body{display:flex;flex-direction:column;height:100vh}
+.chart-body{display:flex;flex-direction:column;height:100%;height:100dvh;max-height:100dvh;padding-bottom:env(safe-area-inset-bottom,0px)}
 .chart-area{flex:1;display:flex;flex-direction:column;min-height:0}
 .chart-row{flex:1;display:flex;min-height:0}
 .chart-main{flex:1;position:relative;background:#131722;overflow:hidden}
@@ -67,8 +67,22 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
 .dt-btn.dt-clear:hover{color:var(--bear);border-color:var(--bear);background:rgba(239,83,80,0.1)}
 
 /* ATAS HUD info box */
-.info{position:absolute;top:6px;left:8px;z-index:5;font-size:11px;color:var(--mu);pointer-events:none;display:flex;flex-wrap:wrap;gap:8px;background:rgba(19,23,34,0.85);backdrop-filter:blur(3px);padding:3px 9px;border-radius:4px;border:1px solid rgba(54,58,69,0.5);box-shadow:0 2px 8px rgba(0,0,0,0.3)}
-.info b{font-weight:700}.info .iv{color:var(--tx)}.info .up{color:var(--bull)}.info .dn{color:var(--bear)}
+.info{display:none}
+
+/* ATAS / DeepChart Bottom Status Bar (Informasi Tanggal & Waktu di Bawah) */
+.sb{display:flex;align-items:center;justify-content:space-between;height:28px;background:#181B24;border-top:1px solid var(--bd);padding:0 10px;font:600 11px var(--mono);flex-shrink:0;z-index:4;color:var(--mu);user-select:none;overflow-x:auto}
+.sb-left{display:flex;align-items:center;gap:10px;white-space:nowrap}
+.sb-time-wrap{display:flex;align-items:center;gap:5px;background:rgba(41,98,255,0.18);border:1px solid rgba(41,98,255,0.45);border-radius:3px;padding:2px 8px;color:#fff}
+.sb-time-val{color:#FFFFFF;font-weight:700;letter-spacing:0.02em}
+.sb-sep{width:1px;height:14px;background:var(--bd2);flex-shrink:0}
+.sb-ohlc{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.sb-ohlc b{color:var(--mu);font-weight:600}
+.sb-ohlc span.val{color:var(--tx);font-weight:700}
+.sb-ohlc span.up{color:var(--bull)}
+.sb-ohlc span.dn{color:var(--bear)}
+.sb-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.sb-tag{background:var(--bg2);border:1px solid var(--bd2);padding:1px 6px;border-radius:3px;color:var(--tx);font-size:10px;font-weight:700}
+.sb-dot{width:6px;height:6px;border-radius:50%;background:var(--bull);box-shadow:0 0 5px var(--bull)}
 
 /* follow / reset button */
 .btn-follow{position:absolute;bottom:12px;right:12px;z-index:6;background:var(--bg2);border:1px solid var(--bd2);color:var(--tx);padding:5px 10px;border-radius:4px;cursor:pointer;font:600 11px var(--mono);display:flex;align-items:center;gap:5px;opacity:0.9;box-shadow:0 2px 8px rgba(0,0,0,0.5);transition:all .15s}
@@ -154,6 +168,29 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
       <div class="x-pad" id="tzPad" title="Timezone: UTC">UTC</div>
     </div>
   </div>
+  <!-- ATAS / DeepChart Bottom Bar: Informasi Tanggal & Waktu di Bagian Bawah -->
+  <footer class="sb" id="sb">
+    <div class="sb-left">
+      <div class="sb-time-wrap">
+        <span>📅</span>
+        <span class="sb-time-val" id="sbTime">Memuat…</span>
+      </div>
+      <div class="sb-sep"></div>
+      <div class="sb-ohlc" id="sbOhlc">
+        <span><b>O</b> <span class="val" id="sbO">–</span></span>
+        <span><b>H</b> <span class="val" id="sbH">–</span></span>
+        <span><b>L</b> <span class="val" id="sbL">–</span></span>
+        <span><b>C</b> <span class="val" id="sbC">–</span></span>
+        <span><b>Chg</b> <span class="val" id="sbChg">–</span></span>
+        <span><b>Vol</b> <span class="val" id="sbVol">–</span></span>
+      </div>
+    </div>
+    <div class="sb-right">
+      <span class="sb-tag" id="sbTf">1H</span>
+      <span class="sb-tag">UTC</span>
+      <span class="sb-dot" id="sbDot"></span>
+    </div>
+  </footer>
 </div>
 
 <div class="modal-overlay" id="shortcutsModal">

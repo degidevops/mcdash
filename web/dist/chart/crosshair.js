@@ -1,4 +1,4 @@
-import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf } from './util.js';
+import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf, formatVol } from './util.js';
 import { screenXToTime } from './drawing.js';
 const XH_COLOR = '#9598A1';
 const BG_TAG = '#1E222D';
@@ -120,13 +120,4 @@ export class CrosshairRenderer {
             + `<b>Chg</b> <span class="${cls}">${fmtChg(diff, dec)} (${fmtPct(pct)})</span> `
             + `<b>Vol</b> <span class="iv">${formatVol(v)}</span>`;
     }
-}
-function formatVol(v) {
-    if (v >= 1e9)
-        return (v / 1e9).toFixed(2) + 'B';
-    if (v >= 1e6)
-        return (v / 1e6).toFixed(2) + 'M';
-    if (v >= 1e3)
-        return (v / 1e3).toFixed(1) + 'K';
-    return v.toFixed(1);
 }

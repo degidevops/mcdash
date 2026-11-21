@@ -89,6 +89,13 @@ export function fmtPct(pct: number): string {
   return `${sign}${pct.toFixed(2)}%`;
 }
 
+export function formatVol(v: number): string {
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+  return v.toFixed(1);
+}
+
 /** Nice price grid step */
 export function niceStep(range: number, maxTicks: number): number {
   const rough = range / maxTicks;
@@ -99,8 +106,11 @@ export function niceStep(range: number, maxTicks: number): number {
 
 /** Nice time grid step (seconds) */
 export function niceTimeStep(rangeSec: number, maxTicks: number): number {
-  const steps = [60, 300, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400, 604800];
+  const steps = [
+    60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600,
+    43200, 86400, 172800, 259200, 432000, 604800
+  ];
   const rough = rangeSec / maxTicks;
   for (const s of steps) if (s >= rough) return s;
-  return 604800;
+  return steps[steps.length - 1];
 }

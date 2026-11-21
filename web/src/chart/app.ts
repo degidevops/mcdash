@@ -19,7 +19,7 @@ import {
 import type { DrawingType, DrawingPoint, DrawingStyle } from './drawing.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
-import { fmtPrice, fmtPct, decimalsOf } from './util.js';
+import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf, formatVol } from './util.js';
 
 export class ChartApp {
   private glCanvas!: HTMLCanvasElement;
@@ -43,6 +43,16 @@ export class ChartApp {
   private btnCloseShortcutsEl!: HTMLElement;
   private chartMainEl!: HTMLElement;
   private btnClearDrawingsEl!: HTMLElement;
+
+  // Bottom Status Bar elements (Informasi Tanggal & Waktu di Bawah)
+  private sbTimeEl: HTMLElement | null = null;
+  private sbOEl: HTMLElement | null = null;
+  private sbHEl: HTMLElement | null = null;
+  private sbLEl: HTMLElement | null = null;
+  private sbCEl: HTMLElement | null = null;
+  private sbChgEl: HTMLElement | null = null;
+  private sbVolEl: HTMLElement | null = null;
+  private sbTfEl: HTMLElement | null = null;
 
   private glCtx!: GLCtx;
   private vp = new Viewport();
@@ -114,6 +124,17 @@ export class ChartApp {
     this.btnCloseShortcutsEl = document.getElementById('btnCloseShortcuts')!;
     this.chartMainEl = document.getElementById('chartMain')!;
     this.btnClearDrawingsEl = document.getElementById('btnClearDrawings')!;
+
+    // Bottom Status Bar (Informasi Tanggal & Waktu di Bawah)
+    this.sbTimeEl = document.getElementById('sbTime');
+    this.sbOEl = document.getElementById('sbO');
+    this.sbHEl = document.getElementById('sbH');
+    this.sbLEl = document.getElementById('sbL');
+    this.sbCEl = document.getElementById('sbC');
+    this.sbChgEl = document.getElementById('sbChg');
+    this.sbVolEl = document.getElementById('sbVol');
+    this.sbTfEl = document.getElementById('sbTf');
+    if (this.sbTfEl) this.sbTfEl.textContent = this.tfLabel(this.tf);
 
     // Drawing storage & interaction
     this.drawingStore.loadFromStorage(this.symbol);
@@ -857,7 +878,7 @@ export class ChartApp {
 
     const xAxis = document.getElementById('xAxis') || this.xCanvas.parentElement!;
     this.xCanvas.width = (xAxis.clientWidth || w) * dpr;
-    this.xCanvas.height = (xAxis.clientHeight || 26) * dpr;
+    this.xCanvas.height = (xAxis.clientHeight || 30) * dpr;
 
     this.vp.setSize(w * dpr, h * dpr, dpr);
     if (this.glCtx && this.glCtx.gl) {
@@ -891,6 +912,7 @@ export class ChartApp {
     });
     this.tf = tf;
     this.client.setTf(tf);
+    if (this.sbTfEl) this.sbTfEl.textContent = this.tfLabel(tf);
     this.statusEl.textContent = 'Memuat data…';
     try {
       const bars = await this.client.fetchBars(tf);
@@ -980,6 +1002,7 @@ export class ChartApp {
     // Draw crosshair on overlay and price/time badges on axes (on top of axis labels)
     crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);
     crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize, this.tf);
+    this.updateBottomBar(bars, vp);
 
     // Current price horizontal line on overlay
     const lastP = bars.lastPrice();
@@ -997,6 +1020,48 @@ export class ChartApp {
       this.ovCtx.stroke();
       this.ovCtx.restore();
     }
+  }
+
+  private updateBottomBar(bars: BarBuffer, vp: Viewport): void {
+    if (!this.sbTimeEl || bars.len === 0) return;
+
+    let idx = this.crosshair.visible ? Math.round(vp.screenToX(this.crosshair.mx)) : bars.len - 1;
+    if (idx < 0 || idx >= bars.len) {
+      idx = bars.len - 1;
+    }
+
+    const dec = decimalsOf(this.tickSize);
+    const o = bars.o[idx], h = bars.h[idx], l = bars.l[idx], c = bars.c[idx], v = bars.v[idx];
+    const diff = c - o;
+    const pct = o !== 0 ? (diff / o) * 100 : 0;
+    const bull = diff >= 0;
+    const cls = bull ? 'up' : 'dn';
+    const ts = bars.t[idx];
+    const timeStr = fmtDate(ts, this.tf);
+
+    this.sbTimeEl.textContent = `${timeStr}`;
+    if (this.sbOEl) this.sbOEl.textContent = fmtPrice(o, dec);
+    if (this.sbHEl) this.sbHEl.textContent = fmtPrice(h, dec);
+    if (this.sbLEl) this.sbLEl.textContent = fmtPrice(l, dec);
+    if (this.sbCEl) {
+      this.sbCEl.textContent = fmtPrice(c, dec);
+      this.sbCEl.className = `val ${cls}`;
+    }
+    if (this.sbChgEl) {
+      this.sbChgEl.textContent = `${fmtChg(diff, dec)} (${fmtPct(pct)})`;
+      this.sbChgEl.className = `val ${cls}`;
+    }
+    if (this.sbVolEl) this.sbVolEl.textContent = formatVol(v);
+  }
+
+  private tfLabel(tf: number): string {
+    if (tf === 1) return '1m';
+    if (tf === 5) return '5m';
+    if (tf === 15) return '15m';
+    if (tf === 60) return '1H';
+    if (tf === 240) return '4H';
+    if (tf === 1440) return 'D';
+    return `${tf}m`;
   }
 
   private detectTickSize(bars: { o: number; h: number; l: number; c: number }[]): number {

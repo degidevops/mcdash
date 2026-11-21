@@ -3,12 +3,12 @@ import type { Viewport } from './viewport.js';
 import type { BarBuffer } from './data.js';
 import { niceStep, niceTimeStep, fmtPrice, fmtTime, fmtDateShort, isSameDay, decimalsOf } from './util.js';
 
-const TEXT_COLOR = '#787B86';
-const DATE_COLOR = '#D1D4DC';
+const TEXT_COLOR = '#CFD8DC';
+const DATE_COLOR = '#FFFFFF';
 const BULL_COLOR = '#26A69A';
 const BEAR_COLOR = '#EF5350';
-const BORDER_COLOR = '#363A45';
-const MAJOR_BORDER = '#4C525E';
+const BORDER_COLOR = '#546E7A';
+const MAJOR_BORDER = '#90A4AE';
 
 export class AxisRenderer {
   drawY(
@@ -114,11 +114,12 @@ export class AxisRenderer {
 
     if (vp.visibleBars <= 0) return;
 
+    // Use CSS width so tick frequency adapts accurately on mobile and high-DPI screens
+    const wCss = w / dpr;
+    const maxTicks = Math.max(4, Math.floor(wCss / 65));
     const rangeSec = vp.visibleBars * tf * 60;
-    const tStep = niceTimeStep(rangeSec, Math.max(2, Math.floor(w / (110 * dpr))));
-    const tStepBars = tStep / (tf * 60);
-
-    if (tStepBars <= 0) return;
+    const tStep = niceTimeStep(rangeSec, maxTicks);
+    const tStepBars = Math.max(1, Math.round(tStep / (tf * 60)));
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -129,8 +130,8 @@ export class AxisRenderer {
 
     for (let bi = iStart; bi <= vp.xMax + tStepBars; bi += tStepBars) {
       const x = Math.round(vp.xToScreen(bi));
-      if (x < 35 * dpr || x > w - 35 * dpr) continue;
-      if (x - lastLabelX < 68 * dpr) continue; // Prevent overlapping labels
+      if (x < 14 * dpr || x > w - 14 * dpr) continue;
+      if (x - lastLabelX < 50 * dpr) continue; // Prevent overlapping labels
 
       let ts: number;
       const idx = Math.round(bi);
@@ -150,21 +151,21 @@ export class AxisRenderer {
       const isDailyOrHigher = tf >= 1440;
 
       // Top tick mark
-      ctx.strokeStyle = isNewDay ? '#4C525E' : BORDER_COLOR;
+      ctx.strokeStyle = isNewDay ? MAJOR_BORDER : BORDER_COLOR;
       ctx.lineWidth = (isNewDay ? 1.5 : 1) * dpr;
       ctx.beginPath();
       ctx.moveTo(x + 0.5, 0);
-      ctx.lineTo(x + 0.5, (isNewDay ? 6 : 4) * dpr);
+      ctx.lineTo(x + 0.5, (isNewDay ? 7 : 4) * dpr);
       ctx.stroke();
 
       if (isDailyOrHigher) {
         // Daily / Weekly: Line 1 = "21 Nov", Line 2 = "2026"
         const d = new Date(ts * 1000);
-        ctx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `bold ${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = DATE_COLOR;
         ctx.fillText(fmtDateShort(ts), x, 11 * dpr);
 
-        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = TEXT_COLOR;
         ctx.fillText(String(d.getFullYear()), x, 22 * dpr);
       } else if (isNewDay || lastLabelX === -999) {
@@ -173,12 +174,11 @@ export class AxisRenderer {
         const dateStr = fmtDateShort(ts);
         const timeStr = fmtTime(ts, tf);
 
-        // Date & Time badge
-        ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = '#FFFFFF';
         ctx.fillText(dateStr, x, 10.5 * dpr);
 
-        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = '#26A69A'; // Highlighted color for session start
         ctx.fillText(timeStr, x, 21.5 * dpr);
         ctx.restore();
@@ -188,7 +188,7 @@ export class AxisRenderer {
         ctx.fillStyle = DATE_COLOR;
         ctx.fillText(fmtTime(ts, tf), x, 10.5 * dpr);
 
-        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = TEXT_COLOR;
         ctx.fillText(fmtDateShort(ts), x, 21.5 * dpr);
       }
