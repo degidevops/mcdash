@@ -3,3 +3,4 @@ web/node_modules/
 telegram.json
 snapshot.json
 *.tmp
+*.tar.gz
