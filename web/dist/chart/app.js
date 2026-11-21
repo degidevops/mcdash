@@ -8,7 +8,7 @@ import { GridRenderer } from './grid.js';
 import { AxisRenderer } from './axis.js';
 import { CrosshairRenderer } from './crosshair.js';
 import { TpoRenderer } from './tpo.js';
-import { DrawingStore, DrawingRenderer, createDrawing, screenXToTime, } from './drawing.js';
+import { DrawingStore, DrawingRenderer, createDrawing, screenXToTime, timeToScreenX, } from './drawing.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
 import { fmtPrice, fmtPct, decimalsOf } from './util.js';
@@ -48,7 +48,13 @@ export class ChartApp {
     panzoom;
     client;
     symbol = 'XAUUSDT';
+    hoverHit = null;
     draggingDrawing = null;
+    isInteractingWithDrawing() {
+        return this.drawingStore.activeTool !== null ||
+            this.draggingDrawing !== null ||
+            this.hoverHit !== null;
+    }
     // Track initial press when drawing shapes to support both click-drag and click-click
     toolPressStart = null;
     tf = 60; // current timeframe in minutes
@@ -92,7 +98,7 @@ export class ChartApp {
         // Client
         this.client = new ChartClient((bars) => { this.bars.load(bars); this.fitAndRender(); }, (price) => { this.bars.updateLast(price); this.updatePrice(price); this.markDirty(); }, (connected) => { this.dotEl.className = connected ? 'ok' : ''; }, (tpoData) => { this.tpo.setData(tpoData); this.markDirty(); });
         // PanZoom with X and Y axis drag & zoom support
-        this.panzoom = new PanZoom(document.getElementById('chartMain'), document.getElementById('yAxis'), document.getElementById('xAxis'), this.vp, () => this.markDirty(), (x, y) => { this.crosshair.update(x, y); this.markDirty(); }, () => { this.crosshair.hide(); this.markDirty(); }, (follow) => this.updateAutoFollowBtn(follow), () => this.drawingStore.activeTool !== null);
+        this.panzoom = new PanZoom(document.getElementById('chartMain'), document.getElementById('yAxis'), document.getElementById('xAxis'), this.vp, () => this.markDirty(), (x, y) => { this.crosshair.update(x, y); this.markDirty(); }, () => { this.crosshair.hide(); this.markDirty(); }, (follow) => this.updateAutoFollowBtn(follow), () => this.isInteractingWithDrawing());
         // Live bar timer tick every second for Y-axis countdown
         setInterval(() => {
             if (this.bars.len > 0)
@@ -376,16 +382,21 @@ export class ChartApp {
             if (hit) {
                 e.stopPropagation();
                 this.drawingStore.setSelected(hit.drawing.id);
+                const d = hit.drawing;
+                const startPointsScreen = d.points.map(pt => ({
+                    x: timeToScreenX(pt.time, this.vp, this.bars),
+                    y: d.type === 'vline' ? this.vp.chartH / 2 : this.vp.yToScreen(pt.price),
+                }));
                 this.draggingDrawing = {
-                    drawingId: hit.drawing.id,
+                    drawingId: d.id,
                     hitType: hit.hitType,
                     pointIndex: hit.pointIndex,
-                    startPoint: { time, price },
-                    startPoints: hit.drawing.points.map(p => ({ ...p })),
                     startScreenX: screenX,
                     startScreenY: screenY,
+                    startPointsScreen,
                     moved: false,
                 };
+                this.chartMainEl.style.cursor = 'grabbing';
                 this.markDirty();
                 return;
             }
@@ -405,23 +416,59 @@ export class ChartApp {
             if (this.draggingDrawing) {
                 const d = this.drawingStore.getDrawing(this.draggingDrawing.drawingId);
                 if (d && !d.locked) {
-                    if (this.draggingDrawing.hitType === 'point' && this.draggingDrawing.pointIndex !== undefined) {
-                        if (d.points[this.draggingDrawing.pointIndex]) {
-                            d.points[this.draggingDrawing.pointIndex] = { time, price };
-                            this.draggingDrawing.moved = true;
-                            this.markDirty();
-                        }
-                    }
-                    else if (this.draggingDrawing.hitType === 'body') {
-                        const dt = time - this.draggingDrawing.startPoint.time;
-                        const dp = price - this.draggingDrawing.startPoint.price;
+                    const dx = screenX - this.draggingDrawing.startScreenX;
+                    const dy = screenY - this.draggingDrawing.startScreenY;
+                    if (this.draggingDrawing.hitType === 'body') {
                         for (let i = 0; i < d.points.length; i++) {
-                            d.points[i] = {
-                                time: this.draggingDrawing.startPoints[i].time + dt,
-                                price: this.draggingDrawing.startPoints[i].price + dp,
-                            };
+                            const orig = this.draggingDrawing.startPointsScreen[i];
+                            if (!orig)
+                                continue;
+                            const newX = orig.x + dx;
+                            const newY = orig.y + dy;
+                            d.points[i].time = screenXToTime(newX, this.vp, this.bars);
+                            if (d.type !== 'vline') {
+                                d.points[i].price = this.vp.screenToY(newY);
+                            }
                         }
                         this.draggingDrawing.moved = true;
+                        this.chartMainEl.style.cursor = 'grabbing';
+                        this.markDirty();
+                    }
+                    else if (this.draggingDrawing.hitType === 'point' && this.draggingDrawing.pointIndex !== undefined) {
+                        const pIdx = this.draggingDrawing.pointIndex;
+                        if (d.type === 'rectangle' && d.points.length >= 2) {
+                            const p0 = this.draggingDrawing.startPointsScreen[0];
+                            const p1 = this.draggingDrawing.startPointsScreen[1];
+                            if (pIdx === 0) {
+                                d.points[0].time = screenXToTime(p0.x + dx, this.vp, this.bars);
+                                d.points[0].price = this.vp.screenToY(p0.y + dy);
+                            }
+                            else if (pIdx === 1) {
+                                d.points[1].time = screenXToTime(p1.x + dx, this.vp, this.bars);
+                                d.points[1].price = this.vp.screenToY(p1.y + dy);
+                            }
+                            else if (pIdx === 2) {
+                                d.points[0].time = screenXToTime(p0.x + dx, this.vp, this.bars);
+                                d.points[1].price = this.vp.screenToY(p1.y + dy);
+                            }
+                            else if (pIdx === 3) {
+                                d.points[1].time = screenXToTime(p1.x + dx, this.vp, this.bars);
+                                d.points[0].price = this.vp.screenToY(p0.y + dy);
+                            }
+                        }
+                        else if (d.points[pIdx]) {
+                            const orig = this.draggingDrawing.startPointsScreen[pIdx];
+                            if (orig) {
+                                const newX = orig.x + dx;
+                                const newY = orig.y + dy;
+                                d.points[pIdx].time = screenXToTime(newX, this.vp, this.bars);
+                                if (d.type !== 'vline') {
+                                    d.points[pIdx].price = this.vp.screenToY(newY);
+                                }
+                            }
+                        }
+                        this.draggingDrawing.moved = true;
+                        this.chartMainEl.style.cursor = 'crosshair';
                         this.markDirty();
                     }
                 }
@@ -436,12 +483,16 @@ export class ChartApp {
             }
             if (isInside && screenY <= this.vp.chartH) {
                 const hit = this.drawingStore.hitTest(screenX, screenY, this.vp, this.bars);
+                this.hoverHit = hit ? { drawingId: hit.drawing.id, hitType: hit.hitType } : null;
                 if (hit) {
                     this.chartMainEl.style.cursor = hit.hitType === 'point' ? 'pointer' : 'move';
                 }
                 else {
                     this.chartMainEl.style.cursor = 'crosshair';
                 }
+            }
+            else {
+                this.hoverHit = null;
             }
         });
         window.addEventListener('mouseup', (e) => {
@@ -450,6 +501,8 @@ export class ChartApp {
                     this.drawingStore.saveToStorage(this.symbol);
                 }
                 this.draggingDrawing = null;
+                this.chartMainEl.style.cursor = this.drawingStore.activeTool ? 'crosshair' : 'default';
+                this.markDirty();
             }
             // Check if user finished a click-and-drag gesture for multi-point drawing
             if (this.drawingStore.activeTool && this.toolPressStart && this.drawingStore.pendingPoints.length === 1) {
@@ -494,14 +547,18 @@ export class ChartApp {
                 e.preventDefault();
                 e.stopPropagation();
                 this.drawingStore.setSelected(hit.drawing.id);
+                const d = hit.drawing;
+                const startPointsScreen = d.points.map(pt => ({
+                    x: timeToScreenX(pt.time, this.vp, this.bars),
+                    y: d.type === 'vline' ? this.vp.chartH / 2 : this.vp.yToScreen(pt.price),
+                }));
                 this.draggingDrawing = {
-                    drawingId: hit.drawing.id,
+                    drawingId: d.id,
                     hitType: hit.hitType,
                     pointIndex: hit.pointIndex,
-                    startPoint: { time, price },
-                    startPoints: hit.drawing.points.map(p => ({ ...p })),
                     startScreenX: screenX,
                     startScreenY: screenY,
+                    startPointsScreen,
                     moved: false,
                 };
                 this.markDirty();
@@ -521,21 +578,55 @@ export class ChartApp {
                 e.preventDefault();
                 const d = this.drawingStore.getDrawing(this.draggingDrawing.drawingId);
                 if (d && !d.locked) {
-                    if (this.draggingDrawing.hitType === 'point' && this.draggingDrawing.pointIndex !== undefined) {
-                        if (d.points[this.draggingDrawing.pointIndex]) {
-                            d.points[this.draggingDrawing.pointIndex] = { time, price };
-                            this.draggingDrawing.moved = true;
-                            this.markDirty();
-                        }
-                    }
-                    else if (this.draggingDrawing.hitType === 'body') {
-                        const dt = time - this.draggingDrawing.startPoint.time;
-                        const dp = price - this.draggingDrawing.startPoint.price;
+                    const dx = screenX - this.draggingDrawing.startScreenX;
+                    const dy = screenY - this.draggingDrawing.startScreenY;
+                    if (this.draggingDrawing.hitType === 'body') {
                         for (let i = 0; i < d.points.length; i++) {
-                            d.points[i] = {
-                                time: this.draggingDrawing.startPoints[i].time + dt,
-                                price: this.draggingDrawing.startPoints[i].price + dp,
-                            };
+                            const orig = this.draggingDrawing.startPointsScreen[i];
+                            if (!orig)
+                                continue;
+                            const newX = orig.x + dx;
+                            const newY = orig.y + dy;
+                            d.points[i].time = screenXToTime(newX, this.vp, this.bars);
+                            if (d.type !== 'vline') {
+                                d.points[i].price = this.vp.screenToY(newY);
+                            }
+                        }
+                        this.draggingDrawing.moved = true;
+                        this.markDirty();
+                    }
+                    else if (this.draggingDrawing.hitType === 'point' && this.draggingDrawing.pointIndex !== undefined) {
+                        const pIdx = this.draggingDrawing.pointIndex;
+                        if (d.type === 'rectangle' && d.points.length >= 2) {
+                            const p0 = this.draggingDrawing.startPointsScreen[0];
+                            const p1 = this.draggingDrawing.startPointsScreen[1];
+                            if (pIdx === 0) {
+                                d.points[0].time = screenXToTime(p0.x + dx, this.vp, this.bars);
+                                d.points[0].price = this.vp.screenToY(p0.y + dy);
+                            }
+                            else if (pIdx === 1) {
+                                d.points[1].time = screenXToTime(p1.x + dx, this.vp, this.bars);
+                                d.points[1].price = this.vp.screenToY(p1.y + dy);
+                            }
+                            else if (pIdx === 2) {
+                                d.points[0].time = screenXToTime(p0.x + dx, this.vp, this.bars);
+                                d.points[1].price = this.vp.screenToY(p1.y + dy);
+                            }
+                            else if (pIdx === 3) {
+                                d.points[1].time = screenXToTime(p1.x + dx, this.vp, this.bars);
+                                d.points[0].price = this.vp.screenToY(p0.y + dy);
+                            }
+                        }
+                        else if (d.points[pIdx]) {
+                            const orig = this.draggingDrawing.startPointsScreen[pIdx];
+                            if (orig) {
+                                const newX = orig.x + dx;
+                                const newY = orig.y + dy;
+                                d.points[pIdx].time = screenXToTime(newX, this.vp, this.bars);
+                                if (d.type !== 'vline') {
+                                    d.points[pIdx].price = this.vp.screenToY(newY);
+                                }
+                            }
                         }
                         this.draggingDrawing.moved = true;
                         this.markDirty();
@@ -555,6 +646,7 @@ export class ChartApp {
                     this.drawingStore.saveToStorage(this.symbol);
                 }
                 this.draggingDrawing = null;
+                this.markDirty();
             }
             if (this.drawingStore.activeTool && this.toolPressStart && this.drawingStore.pendingPoints.length === 1) {
                 const touch = e.changedTouches[0];

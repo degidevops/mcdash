@@ -2,10 +2,11 @@
 import type { Viewport } from './viewport.js';
 import type { BarBuffer } from './data.js';
 import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf } from './util.js';
+import { screenXToTime } from './drawing.js';
 
 const XH_COLOR = '#9598A1';
-const BG_TAG = '#2A2E39';
-const BORDER_TAG = '#4C525E';
+const BG_TAG = '#1E222D';
+const BORDER_TAG = '#2962FF';
 
 export class CrosshairRenderer {
   mx = -1; // screen x (in device pixels)
@@ -31,34 +32,33 @@ export class CrosshairRenderer {
     tf: number,
     tickSize: number,
   ): void {
-    if (!this.visible) return;
+    if (!this.visible || this.mx < 0 || this.my < 0) return;
 
     const w = vp.w, h = vp.h;
     const dpr = vp.dpr || 1;
     const dec = decimalsOf(tickSize);
 
-    // Calculate snap X to candle center if hovering inside chart bounds
-    const barIdx = Math.round(vp.screenToX(this.mx));
-    const hasBar = barIdx >= 0 && barIdx < bars.len;
-    const snapX = hasBar ? Math.round(vp.xToScreen(barIdx)) + 0.5 : this.mx + 0.5;
+    // Smooth 1:1 crosshair following mouse cursor exactly (ATAS / DeepChart style)
+    const cx = Math.round(this.mx) + 0.5;
+    const cy = Math.round(this.my) + 0.5;
 
-    // --- Overlay canvas: dashed lines ---
+    // --- Overlay canvas: crisp dashed lines ---
     ovCtx.save();
     ovCtx.strokeStyle = XH_COLOR;
     ovCtx.lineWidth = 1 * dpr;
     ovCtx.setLineDash([4 * dpr, 3 * dpr]);
-    ovCtx.globalAlpha = 0.7;
+    ovCtx.globalAlpha = 0.75;
 
     // Horizontal line across chart
     ovCtx.beginPath();
-    ovCtx.moveTo(0, this.my + 0.5);
-    ovCtx.lineTo(w, this.my + 0.5);
+    ovCtx.moveTo(0, cy);
+    ovCtx.lineTo(w, cy);
     ovCtx.stroke();
 
     // Vertical line across chart
     ovCtx.beginPath();
-    ovCtx.moveTo(snapX, 0);
-    ovCtx.lineTo(snapX, h);
+    ovCtx.moveTo(cx, 0);
+    ovCtx.lineTo(cx, h);
     ovCtx.stroke();
     ovCtx.restore();
 
@@ -66,7 +66,7 @@ export class CrosshairRenderer {
     ovCtx.save();
     ovCtx.fillStyle = '#FFFFFF';
     ovCtx.beginPath();
-    ovCtx.arc(snapX, this.my + 0.5, 2.5 * dpr, 0, Math.PI * 2);
+    ovCtx.arc(cx, cy, 2.5 * dpr, 0, Math.PI * 2);
     ovCtx.fill();
     ovCtx.restore();
 
@@ -80,14 +80,14 @@ export class CrosshairRenderer {
       yCtx.save();
       yCtx.fillStyle = BG_TAG;
       yCtx.strokeStyle = BORDER_TAG;
-      yCtx.lineWidth = 1 * dpr;
+      yCtx.lineWidth = 1.5 * dpr;
 
       yCtx.beginPath();
       yCtx.moveTo(0, this.my);
-      yCtx.lineTo(5 * dpr, this.my - h2);
+      yCtx.lineTo(6 * dpr, this.my - h2);
       yCtx.lineTo(yw, this.my - h2);
       yCtx.lineTo(yw, this.my + h2);
-      yCtx.lineTo(5 * dpr, this.my + h2);
+      yCtx.lineTo(6 * dpr, this.my + h2);
       yCtx.closePath();
       yCtx.fill();
       yCtx.stroke();
@@ -96,24 +96,12 @@ export class CrosshairRenderer {
       yCtx.font = `bold ${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
       yCtx.textAlign = 'center';
       yCtx.textBaseline = 'middle';
-      yCtx.fillText(label, (yw + 4 * dpr) / 2, this.my);
+      yCtx.fillText(label, (yw + 5 * dpr) / 2, this.my);
       yCtx.restore();
     }
 
     // --- X-axis date & time badge ---
-    let ts: number;
-    if (bars.len > 0) {
-      if (barIdx >= 0 && barIdx < bars.len) {
-        ts = bars.t[barIdx];
-      } else if (barIdx >= bars.len) {
-        ts = bars.t[bars.len - 1] + (barIdx - (bars.len - 1)) * tf * 60;
-      } else {
-        ts = bars.t[0] + barIdx * tf * 60;
-      }
-    } else {
-      ts = Math.floor(Date.now() / 1000);
-    }
-
+    const ts = screenXToTime(this.mx, vp, bars);
     const label = fmtDate(ts, tf);
     const xh = xCtx.canvas.height;
     const xw = xCtx.canvas.width;
@@ -121,18 +109,18 @@ export class CrosshairRenderer {
     xCtx.save();
     xCtx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
     const tw = xCtx.measureText(label).width + 16 * dpr;
-    const clampSnapX = Math.max(tw / 2, Math.min(xw - tw / 2, snapX));
+    const clampCx = Math.max(tw / 2, Math.min(xw - tw / 2, cx));
 
     xCtx.fillStyle = BG_TAG;
-    xCtx.fillRect(clampSnapX - tw / 2, 0, tw, xh);
+    xCtx.fillRect(clampCx - tw / 2, 0, tw, xh);
     xCtx.strokeStyle = BORDER_TAG;
-    xCtx.lineWidth = 1 * dpr;
-    xCtx.strokeRect(clampSnapX - tw / 2 + 0.5, 0.5, tw - 1, xh - 1);
+    xCtx.lineWidth = 1.5 * dpr;
+    xCtx.strokeRect(clampCx - tw / 2 + 0.5, 0.5, tw - 1, xh - 1);
 
     xCtx.fillStyle = '#FFFFFF';
     xCtx.textAlign = 'center';
     xCtx.textBaseline = 'middle';
-    xCtx.fillText(label, clampSnapX, xh / 2);
+    xCtx.fillText(label, clampCx, xh / 2);
     xCtx.restore();
   }
 

@@ -22,7 +22,7 @@ export class PanZoom {
     private onCrosshair: (x: number, y: number) => void,
     private onCrosshairLeave: () => void,
     private onAutoFollowChange?: (follow: boolean) => void,
-    private isDrawingActive?: () => boolean,
+    private isInteracting?: () => boolean,
   ) {
     this.bindMouse();
     this.bindXAxis();
@@ -45,7 +45,7 @@ export class PanZoom {
   private bindMouse(): void {
     this.el.addEventListener('mousedown', (e: MouseEvent) => {
       if (e.button !== 0 && e.button !== 1) return;
-      if (this.isDrawingActive?.()) return; // Don't pan if drawing tool is active
+      if (this.isInteracting?.()) return; // Don't pan if drawing/tool interaction is active
       this.dragging = true;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
@@ -70,6 +70,7 @@ export class PanZoom {
         }
         this.onChange();
       } else if (!this.draggingX && !this.draggingY) {
+        if (this.isInteracting?.()) return;
         // Crosshair position
         const rect = this.el.getBoundingClientRect();
         const x = e.clientX - rect.left;
@@ -86,7 +87,7 @@ export class PanZoom {
     window.addEventListener('mouseup', () => {
       if (this.dragging) {
         this.dragging = false;
-        this.el.style.cursor = this.isDrawingActive?.() ? 'crosshair' : 'default';
+        this.el.style.cursor = this.isInteracting?.() ? 'crosshair' : 'default';
       }
     });
 
@@ -249,8 +250,8 @@ export class PanZoom {
     let lastTouches: Touch[] = [];
 
     this.el.addEventListener('touchstart', (e: TouchEvent) => {
-      if (this.isDrawingActive?.()) {
-        // If drawing tool active, let drawing handler take over
+      if (this.isInteracting?.()) {
+        // If drawing/tool interaction is active, let drawing handler take over
         return;
       }
       e.preventDefault();
@@ -266,7 +267,7 @@ export class PanZoom {
     }, { passive: false });
 
     this.el.addEventListener('touchmove', (e: TouchEvent) => {
-      if (this.isDrawingActive?.()) return;
+      if (this.isInteracting?.()) return;
       e.preventDefault();
       const cur = Array.from(e.touches);
       const dpr = window.devicePixelRatio || 1;
@@ -303,7 +304,7 @@ export class PanZoom {
     }, { passive: false });
 
     this.el.addEventListener('touchend', (e: TouchEvent) => {
-      if (this.isDrawingActive?.()) return;
+      if (this.isInteracting?.()) return;
       if (e.touches.length === 0) {
         lastTouches = [];
         this.onCrosshairLeave();

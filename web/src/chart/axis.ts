@@ -129,8 +129,8 @@ export class AxisRenderer {
 
     for (let bi = iStart; bi <= vp.xMax + tStepBars; bi += tStepBars) {
       const x = Math.round(vp.xToScreen(bi));
-      if (x < 30 * dpr || x > w - 30 * dpr) continue;
-      if (x - lastLabelX < 65 * dpr) continue; // Prevent overlapping labels
+      if (x < 35 * dpr || x > w - 35 * dpr) continue;
+      if (x - lastLabelX < 68 * dpr) continue; // Prevent overlapping labels
 
       let ts: number;
       const idx = Math.round(bi);
@@ -146,50 +146,51 @@ export class AxisRenderer {
         ts = Math.floor(Date.now() / 1000) + (bi - 100) * tf * 60;
       }
 
-      // Check if this label marks a new calendar day
       const isNewDay = prevTs > 0 && !isSameDay(prevTs, ts);
       const isDailyOrHigher = tf >= 1440;
 
-      if (isDailyOrHigher) {
-        // Daily or higher: show Date e.g. "21 Nov"
-        ctx.font = `${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
-        ctx.fillStyle = TEXT_COLOR;
-        ctx.strokeStyle = BORDER_COLOR;
-        ctx.lineWidth = 1 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, 4 * dpr);
-        ctx.stroke();
+      // Top tick mark
+      ctx.strokeStyle = isNewDay ? '#4C525E' : BORDER_COLOR;
+      ctx.lineWidth = (isNewDay ? 1.5 : 1) * dpr;
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, 0);
+      ctx.lineTo(x + 0.5, (isNewDay ? 6 : 4) * dpr);
+      ctx.stroke();
 
-        ctx.fillText(fmtDateShort(ts), x, h / 2);
-      } else if (isNewDay || lastLabelX === -999) {
-        // First visible label or day transition: prominent Date tag (e.g. "21 Nov")
+      if (isDailyOrHigher) {
+        // Daily / Weekly: Line 1 = "21 Nov", Line 2 = "2026"
+        const d = new Date(ts * 1000);
         ctx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = DATE_COLOR;
+        ctx.fillText(fmtDateShort(ts), x, 11 * dpr);
 
-        // Prominent tick mark on day boundary
-        ctx.strokeStyle = MAJOR_BORDER;
-        ctx.lineWidth = 1.5 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, 6 * dpr);
-        ctx.stroke();
-
-        const label = fmtDateShort(ts);
-        ctx.fillText(label, x, h / 2);
-      } else {
-        // Regular intraday tick: show Time "HH:mm"
-        ctx.font = `${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
         ctx.fillStyle = TEXT_COLOR;
+        ctx.fillText(String(d.getFullYear()), x, 22 * dpr);
+      } else if (isNewDay || lastLabelX === -999) {
+        // Day boundary or first visible label: prominent date tag with time
+        ctx.save();
+        const dateStr = fmtDateShort(ts);
+        const timeStr = fmtTime(ts, tf);
 
-        ctx.strokeStyle = BORDER_COLOR;
-        ctx.lineWidth = 1 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, 4 * dpr);
-        ctx.stroke();
+        // Date & Time badge
+        ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(dateStr, x, 10.5 * dpr);
 
-        ctx.fillText(fmtTime(ts, tf), x, h / 2);
+        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.fillStyle = '#26A69A'; // Highlighted color for session start
+        ctx.fillText(timeStr, x, 21.5 * dpr);
+        ctx.restore();
+      } else {
+        // Regular intraday tick: Line 1 = "14:00" (bold), Line 2 = "21 Nov" (date info)
+        ctx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.fillStyle = DATE_COLOR;
+        ctx.fillText(fmtTime(ts, tf), x, 10.5 * dpr);
+
+        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.fillStyle = TEXT_COLOR;
+        ctx.fillText(fmtDateShort(ts), x, 21.5 * dpr);
       }
 
       prevTs = ts;

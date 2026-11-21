@@ -154,14 +154,22 @@ export function createDrawing(
   points: DrawingPoint[],
   style?: Partial<DrawingStyle>
 ): Drawing {
+  const defaultColors: Record<DrawingType, string> = {
+    trendline: '#2962FF',
+    hline: '#FFD700',
+    vline: '#00BCD4',
+    fibonacci: '#FF9800',
+    rectangle: '#2962FF',
+  };
+
   return {
     id: 'd_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
     type,
     points,
     style: {
-      color: style?.color ?? '#2962FF',
-      width: style?.width ?? 2,
-      ...(style?.dash ? { dash: style.dash } : {}),
+      color: style?.color ?? defaultColors[type] ?? '#2962FF',
+      width: style?.width ?? (type === 'trendline' ? 2 : 1.5),
+      ...(style?.dash ? { dash: style.dash } : type === 'hline' || type === 'vline' ? { dash: [4, 4] } : {}),
     },
     visible: true,
     locked: false,
@@ -241,19 +249,45 @@ export class DrawingStore {
     if (bars.len === 0 || this.drawings.length === 0) return null;
 
     const dpr = vp.dpr || 1;
-    const handleHitRadius = Math.max(10 * dpr, 18);
-    const lineHitTolerance = Math.max(8 * dpr, 14);
+    const handleHitRadius = Math.max(12 * dpr, 22);
+    const lineHitTolerance = Math.max(10 * dpr, 18);
 
     // 1. Check handles of selected drawing first (priority for resizing)
     if (this.selectedId) {
       const sel = this.getDrawing(this.selectedId);
       if (sel && sel.visible && !sel.locked) {
-        for (let i = 0; i < sel.points.length; i++) {
-          const pt = sel.points[i];
-          const px = timeToScreenX(pt.time, vp, bars);
-          const py = sel.type === 'vline' ? vp.chartH / 2 : vp.yToScreen(pt.price);
-          if (Math.hypot(screenX - px, screenY - py) <= handleHitRadius) {
-            return { drawing: sel, hitType: 'point', pointIndex: i };
+        if (sel.type === 'hline' && sel.points.length > 0) {
+          const pt = sel.points[0];
+          const x1 = pt.time ? timeToScreenX(pt.time, vp, bars) : vp.w / 2;
+          const handleX = Math.max(30 * dpr, Math.min(vp.w - 50 * dpr, x1));
+          const py = vp.yToScreen(pt.price);
+          if (Math.hypot(screenX - handleX, screenY - py) <= handleHitRadius) {
+            return { drawing: sel, hitType: 'point', pointIndex: 0 };
+          }
+        } else if (sel.type === 'rectangle' && sel.points.length >= 2) {
+          const x1 = timeToScreenX(sel.points[0].time, vp, bars);
+          const y1 = vp.yToScreen(sel.points[0].price);
+          const x2 = timeToScreenX(sel.points[1].time, vp, bars);
+          const y2 = vp.yToScreen(sel.points[1].price);
+          const corners = [
+            { x: x1, y: y1, idx: 0 },
+            { x: x2, y: y2, idx: 1 },
+            { x: x1, y: y2, idx: 2 },
+            { x: x2, y: y1, idx: 3 },
+          ];
+          for (const c of corners) {
+            if (Math.hypot(screenX - c.x, screenY - c.y) <= handleHitRadius) {
+              return { drawing: sel, hitType: 'point', pointIndex: c.idx };
+            }
+          }
+        } else {
+          for (let i = 0; i < sel.points.length; i++) {
+            const pt = sel.points[i];
+            const px = timeToScreenX(pt.time, vp, bars);
+            const py = sel.type === 'vline' ? vp.chartH / 2 : vp.yToScreen(pt.price);
+            if (Math.hypot(screenX - px, screenY - py) <= handleHitRadius) {
+              return { drawing: sel, hitType: 'point', pointIndex: i };
+            }
           }
         }
       }
@@ -263,12 +297,38 @@ export class DrawingStore {
     for (let i = this.drawings.length - 1; i >= 0; i--) {
       const d = this.drawings[i];
       if (!d.visible || d.locked) continue;
-      for (let pIdx = 0; pIdx < d.points.length; pIdx++) {
-        const pt = d.points[pIdx];
-        const px = timeToScreenX(pt.time, vp, bars);
-        const py = d.type === 'vline' ? vp.chartH / 2 : vp.yToScreen(pt.price);
-        if (Math.hypot(screenX - px, screenY - py) <= handleHitRadius) {
-          return { drawing: d, hitType: 'point', pointIndex: pIdx };
+      if (d.type === 'hline' && d.points.length > 0) {
+        const pt = d.points[0];
+        const x1 = pt.time ? timeToScreenX(pt.time, vp, bars) : vp.w / 2;
+        const handleX = Math.max(30 * dpr, Math.min(vp.w - 50 * dpr, x1));
+        const py = vp.yToScreen(pt.price);
+        if (Math.hypot(screenX - handleX, screenY - py) <= handleHitRadius) {
+          return { drawing: d, hitType: 'point', pointIndex: 0 };
+        }
+      } else if (d.type === 'rectangle' && d.points.length >= 2) {
+        const x1 = timeToScreenX(d.points[0].time, vp, bars);
+        const y1 = vp.yToScreen(d.points[0].price);
+        const x2 = timeToScreenX(d.points[1].time, vp, bars);
+        const y2 = vp.yToScreen(d.points[1].price);
+        const corners = [
+          { x: x1, y: y1, idx: 0 },
+          { x: x2, y: y2, idx: 1 },
+          { x: x1, y: y2, idx: 2 },
+          { x: x2, y: y1, idx: 3 },
+        ];
+        for (const c of corners) {
+          if (Math.hypot(screenX - c.x, screenY - c.y) <= handleHitRadius) {
+            return { drawing: d, hitType: 'point', pointIndex: c.idx };
+          }
+        }
+      } else {
+        for (let pIdx = 0; pIdx < d.points.length; pIdx++) {
+          const pt = d.points[pIdx];
+          const px = timeToScreenX(pt.time, vp, bars);
+          const py = d.type === 'vline' ? vp.chartH / 2 : vp.yToScreen(pt.price);
+          if (Math.hypot(screenX - px, screenY - py) <= handleHitRadius) {
+            return { drawing: d, hitType: 'point', pointIndex: pIdx };
+          }
         }
       }
     }
@@ -281,13 +341,14 @@ export class DrawingStore {
       if (d.type === 'hline') {
         if (d.points.length < 1) continue;
         const py = vp.yToScreen(d.points[0].price);
-        if (Math.abs(screenY - py) <= lineHitTolerance && screenX >= 0 && screenX <= vp.w) {
+        // Match line or right price badge
+        if (Math.abs(screenY - py) <= lineHitTolerance && screenX >= 0 && screenX <= vp.w + 10 * dpr) {
           return { drawing: d, hitType: 'body' };
         }
       } else if (d.type === 'vline') {
         if (d.points.length < 1) continue;
         const px = timeToScreenX(d.points[0].time, vp, bars);
-        if (Math.abs(screenX - px) <= lineHitTolerance && screenY >= 0 && screenY <= vp.chartH) {
+        if (Math.abs(screenX - px) <= lineHitTolerance && screenY >= 0 && screenY <= vp.chartH + 10 * dpr) {
           return { drawing: d, hitType: 'body' };
         }
       } else if (d.type === 'trendline') {
@@ -311,7 +372,7 @@ export class DrawingStore {
         const minY = Math.min(y1, y2);
         const maxY = Math.max(y1, y2);
 
-        // Check inside rect
+        // Check inside rect (fill area)
         if (screenX >= minX - 4 * dpr && screenX <= maxX + 4 * dpr &&
             screenY >= minY - 4 * dpr && screenY <= maxY + 4 * dpr) {
           return { drawing: d, hitType: 'body' };
@@ -351,7 +412,7 @@ export class DrawingStore {
 
         const minY = Math.min(y1, y2);
         const maxY = Math.max(y1, y2);
-        if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
+        if (screenX >= minX && screenX <= maxX + width && screenY >= minY && screenY <= maxY) {
           return { drawing: d, hitType: 'body' };
         }
       }

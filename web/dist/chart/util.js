@@ -36,6 +36,18 @@ export function fmtDateShort(ts) {
     const dd = String(d.getDate()).padStart(2, '0');
     return `${dd} ${mo}`;
 }
+/** Format 2-line tick parts for X-axis (Time + Date) */
+export function fmtTickParts(ts, tf) {
+    const d = new Date(ts * 1000);
+    const mo = MONTHS[d.getMonth()];
+    const dd = String(d.getDate()).padStart(2, '0');
+    if (tf >= 1440) {
+        return { top: `${dd} ${mo}`, sub: String(d.getFullYear()) };
+    }
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return { top: `${hh}:${mm}`, sub: `${dd} ${mo}` };
+}
 /** Check if two unix timestamps (in seconds) are on the same calendar day */
 export function isSameDay(ts1, ts2) {
     const d1 = new Date(ts1 * 1000);
