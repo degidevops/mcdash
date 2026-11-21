@@ -14,7 +14,7 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/", get(|s| file(s, "index.html", "text/html; charset=utf-8")))
         .route("/chart", get(|s| file(s, "chart.html", "text/html; charset=utf-8")))
-        .route("/chart/{*path}", get(chart_js))
+        .route("/chart/*path", get(chart_js))
         .route("/api/chart-bars", get(chart_bars))
         .route("/:name", get(js_module))
         .route("/api/snapshot", get(api_snapshot))
@@ -55,16 +55,21 @@ async fn js_module(State(app): State<Arc<App>>, axum::extract::Path(name): axum:
 }
 
 /// Serve chart JS modules from dist/chart/ subdirectory (e.g. /chart/app.js → dist/chart/app.js)
+/// or chart.html if path is empty.
 async fn chart_js(State(app): State<Arc<App>>, axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    let clean = path.trim_start_matches('/');
+    if clean.is_empty() {
+        return file(State(app), "chart.html", "text/html; charset=utf-8").await;
+    }
     // validate: only allow [a-z0-9_/-]+\.js
-    let ok = path.strip_suffix(".js").map_or(false, |b| {
+    let ok = clean.strip_suffix(".js").map_or(false, |b| {
         !b.is_empty() && b.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-' || c == b'/')
             && !b.contains("..")
     });
     if !ok {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let full = format!("chart/{path}");
+    let full = format!("chart/{clean}");
     file(State(app), &full, "text/javascript; charset=utf-8").await
 }
 
@@ -175,5 +180,24 @@ async fn client(mut sock: WebSocket, app: Arc<App>) {
                 _ => {}
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn router_creates_without_panicking() {
+        let (tx, _) = tokio::sync::broadcast::channel(16);
+        let app = Arc::new(App {
+            shared: std::sync::RwLock::new(Shared::default()),
+            tx,
+            cfg_path: "config.json".into(),
+            web_dir: PathBuf::from("web/dist"),
+            notifier: crate::notifier::Notifier::new(PathBuf::from("telegram.json")),
+        });
+        let _ = router(app);
     }
 }
