@@ -4,6 +4,7 @@ use mcdash_core::bias::Full;
 use mcdash_core::Snap;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
@@ -27,6 +28,7 @@ pub struct Shared {
     pub snap: Option<Snap>, // harga di dalamnya selalu yang terbaru (ikut tick)
     pub snap_frame: Option<String>,
     pub tick: Option<TickState>,
+    pub chart_bars: HashMap<i64, mcdash_core::Bars>,
 }
 
 pub struct App {

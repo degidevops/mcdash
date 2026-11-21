@@ -13,6 +13,9 @@ use tokio::sync::broadcast::error::RecvError;
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/", get(|s| file(s, "index.html", "text/html; charset=utf-8")))
+        .route("/chart", get(|s| file(s, "chart.html", "text/html; charset=utf-8")))
+        .route("/chart/{*path}", get(chart_js))
+        .route("/api/chart-bars", get(chart_bars))
         .route("/:name", get(js_module))
         .route("/api/snapshot", get(api_snapshot))
         .route("/api/config", get(get_config).post(post_config))
@@ -49,6 +52,42 @@ async fn js_module(State(app): State<Arc<App>>, axum::extract::Path(name): axum:
         return StatusCode::NOT_FOUND.into_response();
     }
     file(State(app), &name, "text/javascript; charset=utf-8").await
+}
+
+/// Serve chart JS modules from dist/chart/ subdirectory (e.g. /chart/app.js → dist/chart/app.js)
+async fn chart_js(State(app): State<Arc<App>>, axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    // validate: only allow [a-z0-9_/-]+\.js
+    let ok = path.strip_suffix(".js").map_or(false, |b| {
+        !b.is_empty() && b.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-' || c == b'/')
+            && !b.contains("..")
+    });
+    if !ok {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let full = format!("chart/{path}");
+    file(State(app), &full, "text/javascript; charset=utf-8").await
+}
+
+#[derive(serde::Deserialize)]
+struct ChartQuery {
+    tf: Option<i64>,
+    count: Option<usize>,
+}
+
+/// GET /api/chart-bars?tf=60&count=500 → [[ts,o,h,l,c,v], ...]
+async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::extract::Query<ChartQuery>) -> Response {
+    let tf = q.tf.unwrap_or(60);
+    let count = q.count.unwrap_or(500);
+    let sh = app.shared.read().unwrap();
+    let bars = match sh.chart_bars.get(&tf) {
+        Some(b) => b,
+        None => return json_resp(StatusCode::OK, "[]".into()),
+    };
+    // Take the last `count` bars, output as array of arrays
+    let total = bars.len();
+    let skip = if total > count { total - count } else { 0 };
+    let arr: Vec<[f64; 6]> = bars.iter().skip(skip).map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
+    json_resp(StatusCode::OK, serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into()))
 }
 
 async fn api_snapshot(State(app): State<Arc<App>>) -> Response {

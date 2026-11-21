@@ -514,6 +514,7 @@ impl Runner {
             sh.meta = meta;
             sh.snap = Some(snap);
             sh.snap_frame = Some(frame.clone());
+            sh.chart_bars = self.bars.clone();
         }
         self.last_meta = now_f();
         let _ = self.app.tx.send(frame);

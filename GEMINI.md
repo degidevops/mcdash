@@ -101,8 +101,8 @@ mcdash/
 - **Arsitektur**: Hybrid WebGL2 + Canvas 2D, 3-layer rendering
 - **Proposal**: Lihat `.agents/docs/chart-proposal.md`
 - **Fase**:
-  1. Phase 1: Candlestick + Volume + Zoom/Pan + Realtime ← **MULAI DI SINI**
-  2. Phase 2: Crosshair + Multi-TF + Info Box
+  1. Phase 1: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
+  2. Phase 2: Crosshair + Multi-TF + Info Box ← **SELANJUTNYA**
   3. Phase 3: TPO Overlay + Level Lines
   4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect)
   5. Phase 5: Polish (mobile, shortcuts, export)

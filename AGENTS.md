@@ -14,7 +14,8 @@ cargo build --release --bin mcdash
 
 ## Status: M3 — Professional Trading Chart (IN PROGRESS)
 - Halaman `/chart` — full professional trading chart bergaya ATAS/DeepChart
-- Phase 1: Candlestick + Volume + Zoom/Pan + Realtime ← **MULAI DI SINI**
+- Phase 1: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
+- Phase 2: Crosshair + Multi-TF + Info Box ← **MULAI DI SINI**
 - Arsitektur: Hybrid WebGL2 + Canvas 2D
 - Proposal lengkap: `.agents/docs/chart-proposal.md`
 - Bahasa respons: **Bahasa Indonesia**
