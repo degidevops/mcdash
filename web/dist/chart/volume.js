@@ -46,12 +46,8 @@ export class VolumeRenderer {
         if (this.count === 0)
             return;
         const { gl, prog, buf, uView } = ctx;
-        // Extend the view to include volume region below yMin
-        const priceRange = view[3] - view[2];
-        const volWorldH = priceRange * 0.18 / (1 - 0.18);
-        const extView = [view[0], view[1], view[2] - volWorldH, view[3]];
         gl.useProgram(prog);
-        gl.uniform4fv(uView, extView);
+        gl.uniform4fv(uView, view);
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, this.verts.subarray(0, this.count * FLOATS_PER_VERT), gl.DYNAMIC_DRAW);
         gl.enableVertexAttribArray(0);

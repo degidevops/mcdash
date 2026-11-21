@@ -168,7 +168,7 @@ impl Runner {
         if cfg.atr_feed_tf > 0 && !needed.contains(&cfg.atr_feed_tf) {
             needed.push(cfg.atr_feed_tf);
         }
-        for &ctf in &[15, 60] {
+        for &ctf in &[1, 5, 15, 60, 240, 1440] {
             if !needed.contains(&ctf) {
                 needed.push(ctf);
             }
@@ -293,7 +293,7 @@ impl Runner {
             return;
         }
         for tf in due {
-            if !self.tv.contains_key(&tf) && (self.engine.as_ref().map_or(false, |e| e.needed_tfs().contains(&tf) || cfg.atr_feed_tf == tf) || tf == 15 || tf == 60) {
+            if !self.tv.contains_key(&tf) && (self.engine.as_ref().map_or(false, |e| e.needed_tfs().contains(&tf) || cfg.atr_feed_tf == tf) || [1, 5, 15, 60, 240, 1440].contains(&tf)) {
                 self.start_tv(tf, cfg.history_bars, &cfg.source);
             }
         }
@@ -324,11 +324,14 @@ impl Runner {
         }
         match ev {
             FeedEvent::History { tf, bars, point } => {
-                self.bars.insert(tf, bars);
+                self.bars.insert(tf, bars.clone());
                 self.hist_done.insert(tf);
                 self.set_point(point);
                 self.dirty = true;
                 self.force = true;
+                if let Ok(mut sh) = self.app.shared.write() {
+                    sh.chart_bars.insert(tf, bars);
+                }
             }
             FeedEvent::Live { tf, bars } => {
                 if !self.hist_done.contains(&tf) {
@@ -342,6 +345,11 @@ impl Runner {
                 }
                 self.dirty = true;
                 self.force |= new_bar;
+                if let Ok(mut sh) = self.app.shared.write() {
+                    if let Some(cur) = self.bars.get(&tf) {
+                        sh.chart_bars.insert(tf, cur.clone());
+                    }
+                }
                 // harga = close bar terakhir dari feed timeframe terkecil (TradingView & Binance; MT5 mengirim bid langsung)
                 if self.tv.keys().min() == Some(&tf) {
                     if let Some((_, b)) = bars.iter().max_by_key(|(t, _)| *t) {

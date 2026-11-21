@@ -58,12 +58,12 @@ export class ChartApp {
     this.pxEl = document.getElementById('px')!;
     this.chgEl = document.getElementById('chg')!;
 
-    // Size canvases
+    // WebGL context first
+    this.glCtx = initGL(this.glCanvas);
+
+    // Size canvases (after glCtx is ready)
     this.resize();
     window.addEventListener('resize', () => { this.resize(); this.markDirty(); });
-
-    // WebGL
-    this.glCtx = initGL(this.glCanvas);
 
     // Client
     this.client = new ChartClient(
@@ -89,33 +89,41 @@ export class ChartApp {
       this.switchTf(tf);
     });
 
-    // Fetch initial data
-    this.statusEl.textContent = 'Memuat data…';
-    try {
-      const bars = await this.client.fetchBars(this.tf);
-      this.bars.load(bars);
-      if (bars.length > 0) {
-        this.openPrice = bars[0].o;
-        this.tickSize = this.detectTickSize(bars);
-      }
-      this.fitAndRender();
-      this.statusEl.textContent = '';
-    } catch (e) {
-      this.statusEl.textContent = `Gagal memuat data: ${e}`;
-    }
+    // Start render loop immediately
+    this.renderLoop();
 
     // Connect WebSocket for live ticks
     this.client.connect();
 
-    // Start render loop
-    this.renderLoop();
+    // Fetch initial data with auto-retry
+    const loadData = async (retry = 0) => {
+      this.statusEl.textContent = retry > 0 ? `Menunggu data dari Binance… (${retry})` : 'Memuat data…';
+      try {
+        const bars = await this.client.fetchBars(this.tf);
+        if (bars.length > 0) {
+          this.bars.load(bars);
+          this.openPrice = bars[0].o;
+          this.tickSize = this.detectTickSize(bars);
+          this.fitAndRender();
+          this.statusEl.textContent = '';
+        } else if (retry < 30) {
+          setTimeout(() => loadData(retry + 1), 1000);
+        } else {
+          this.statusEl.textContent = 'Data belum siap, silakan ganti timeframe atau refresh.';
+        }
+      } catch (e) {
+        this.statusEl.textContent = `Gagal memuat: ${e}`;
+        if (retry < 15) setTimeout(() => loadData(retry + 1), 1500);
+      }
+    };
+    await loadData();
   }
 
   private resize(): void {
     const main = document.getElementById('chartMain')!;
-    const dpr = devicePixelRatio;
-    const w = main.clientWidth;
-    const h = main.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    const w = main.clientWidth || 800;
+    const h = main.clientHeight || 500;
 
     this.glCanvas.width = w * dpr;
     this.glCanvas.height = h * dpr;
@@ -123,15 +131,17 @@ export class ChartApp {
     this.ovCanvas.height = h * dpr;
 
     const yAxis = document.getElementById('yAxis')!;
-    this.yCanvas.width = yAxis.clientWidth * dpr;
-    this.yCanvas.height = yAxis.clientHeight * dpr;
+    this.yCanvas.width = (yAxis.clientWidth || 72) * dpr;
+    this.yCanvas.height = (yAxis.clientHeight || h) * dpr;
 
     const xRow = this.xCanvas.parentElement!;
-    this.xCanvas.width = xRow.clientWidth * dpr;
-    this.xCanvas.height = xRow.clientHeight * dpr;
+    this.xCanvas.width = (xRow.clientWidth || w) * dpr;
+    this.xCanvas.height = (xRow.clientHeight || 22) * dpr;
 
     this.vp.setSize(w * dpr, h * dpr);
-    this.glCtx.gl.viewport(0, 0, w * dpr, h * dpr);
+    if (this.glCtx && this.glCtx.gl) {
+      this.glCtx.gl.viewport(0, 0, w * dpr, h * dpr);
+    }
   }
 
   private markDirty(): void { this.dirty = true; }

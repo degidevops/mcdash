@@ -38,9 +38,11 @@ export class Viewport {
     screenToX(px) { return this.xMin + px / this.w * (this.xMax - this.xMin); }
     screenToY(py) { return this.yMin + (1 - py / this.chartH) * (this.yMax - this.yMin); }
     // ---- WebGL clip coordinates ----
-    /** Returns [xMin, xMax, yMin, yMax] for the chart area (excluding volume) */
+    /** Returns [xMin, xMax, yMinWithVol, yMax] for WebGL clip coordinates */
     clipView() {
-        return [this.xMin, this.xMax, this.yMin, this.yMax];
+        const priceRange = this.yMax - this.yMin;
+        const volWorldH = priceRange * this.volFrac / (1 - this.volFrac);
+        return [this.xMin, this.xMax, this.yMin - volWorldH, this.yMax];
     }
     // ---- Interaction ----
     pan(dxPx, dyPx) {
