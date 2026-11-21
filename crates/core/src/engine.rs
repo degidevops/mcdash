@@ -244,6 +244,128 @@ impl TpoEngine {
             },
         }
     }
+
+    /// Ekspor representasi TPO lengkap untuk rendering overlay di chart.
+    pub fn chart_tpo(&self) -> ChartTpoResponse {
+        let mut profiles = BTreeMap::new();
+        let mut naked = Vec::new();
+
+        for (tag, pf, _) in &self.profiles {
+            let mut periods = Vec::new();
+
+            for (i, p) in pf.items.iter().enumerate() {
+                if !p.valid {
+                    continue;
+                }
+                periods.push(ChartTpoPeriod {
+                    name: pf.name(i),
+                    start: p.start,
+                    end: p.end,
+                    tick: p.tick,
+                    high: p.d_high,
+                    low: p.d_low,
+                    poc: p.poc,
+                    vah: p.vah,
+                    val: p.val,
+                    touched_poc: p.touch[0].is_some(),
+                    touched_vah: p.touch[1].is_some(),
+                    touched_val: p.touch[2].is_some(),
+                    rows: p.tpo_rows(),
+                });
+
+                for (k, kind) in ["POC", "VAH", "VAL"].iter().enumerate() {
+                    if p.touch[k].is_none() {
+                        naked.push(ChartNakedLevel {
+                            name: format!("n{} {}", kind, pf.name(i)),
+                            kind: kind.to_string(),
+                            price: p.level(k),
+                            start_time: p.start,
+                        });
+                    }
+                }
+            }
+
+            if let Some(cur) = pf.cur.as_ref() {
+                if cur.valid {
+                    periods.push(ChartTpoPeriod {
+                        name: format!("{}-now", tag),
+                        start: cur.start,
+                        end: cur.end,
+                        tick: cur.tick,
+                        high: cur.d_high,
+                        low: cur.d_low,
+                        poc: cur.poc,
+                        vah: cur.vah,
+                        val: cur.val,
+                        touched_poc: cur.touch[0].is_some(),
+                        touched_vah: cur.touch[1].is_some(),
+                        touched_val: cur.touch[2].is_some(),
+                        rows: cur.tpo_rows(),
+                    });
+                }
+            }
+
+            profiles.insert(
+                tag.clone(),
+                ChartTpoProfile {
+                    tag: tag.clone(),
+                    mode: pf.cfg.mode.as_str().into(),
+                    periods,
+                },
+            );
+        }
+
+        ChartTpoResponse {
+            symbol: self.symbol.clone(),
+            point: self.point,
+            profiles,
+            naked,
+        }
+    }
+}
+
+/// Satu periode TPO pada chart dengan baris-baris histogram.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ChartTpoPeriod {
+    pub name: String,
+    pub start: i64,
+    pub end: i64,
+    pub tick: f64,
+    pub high: f64,
+    pub low: f64,
+    pub poc: f64,
+    pub vah: f64,
+    pub val: f64,
+    pub touched_poc: bool,
+    pub touched_vah: bool,
+    pub touched_val: bool,
+    pub rows: Vec<crate::period::TpoRowSnap>,
+}
+
+/// Kumpulan periode TPO untuk satu profil (mis. Sessional atau Daily).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ChartTpoProfile {
+    pub tag: String,
+    pub mode: String,
+    pub periods: Vec<ChartTpoPeriod>,
+}
+
+/// Level Naked (belum tersentuh) untuk digambar memanjang melintasi sesi.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ChartNakedLevel {
+    pub name: String,
+    pub kind: String,
+    pub price: f64,
+    pub start_time: i64,
+}
+
+/// Response JSON lengkap untuk endpoint `/api/chart-tpo`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub struct ChartTpoResponse {
+    pub symbol: String,
+    pub point: f64,
+    pub profiles: BTreeMap<String, ChartTpoProfile>,
+    pub naked: Vec<ChartNakedLevel>,
 }
 
 // ---------------------------------------------------------------- teks (setara --text / --once)

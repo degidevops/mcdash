@@ -17,6 +17,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/chart", get(|s| file(s, "chart.html", "text/html; charset=utf-8")))
         .route("/chart/*path", get(chart_js))
         .route("/api/chart-bars", get(chart_bars))
+        .route("/api/chart-tpo", get(chart_tpo))
         .route("/:name", get(js_module))
         .route("/api/snapshot", get(api_snapshot))
         .route("/api/config", get(get_config).post(post_config))
@@ -126,6 +127,30 @@ async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::
     let skip = if total > count { total - count } else { 0 };
     let arr: Vec<[f64; 6]> = bars.iter().skip(skip).map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
     json_resp(StatusCode::OK, serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into()))
+}
+
+#[derive(serde::Deserialize)]
+struct ChartTpoQuery {
+    tag: Option<String>,
+}
+
+/// GET /api/chart-tpo?tag=S
+async fn chart_tpo(State(app): State<Arc<App>>, axum::extract::Query(q): axum::extract::Query<ChartTpoQuery>) -> Response {
+    let sh = app.shared.read().unwrap();
+    if let Some(tpo) = sh.chart_tpo.as_ref() {
+        if let Some(tag) = q.tag {
+            let mut filtered = tpo.clone();
+            filtered.profiles.retain(|k, _| k == &tag);
+            return json_resp(StatusCode::OK, serde_json::to_string(&filtered).unwrap_or_else(|_| "{}".into()));
+        }
+        return json_resp(StatusCode::OK, serde_json::to_string(tpo).unwrap_or_else(|_| "{}".into()));
+    }
+    let sym = sh.snap.as_ref().map(|s| s.symbol.clone()).unwrap_or_default();
+    let pt = sh.snap.as_ref().map(|s| s.point).unwrap_or(0.01);
+    json_resp(
+        StatusCode::OK,
+        format!("{{\"symbol\":\"{sym}\",\"point\":{pt},\"profiles\":{{}},\"naked\":[]}}"),
+    )
 }
 
 async fn api_snapshot(State(app): State<Arc<App>>) -> Response {

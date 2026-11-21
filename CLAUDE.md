@@ -9,7 +9,7 @@
 
 - **Bahasa respons**: Selalu dalam Bahasa Indonesia
 - **Build**: `cargo build --release --bin mcdash`
-- **Test**: `cargo test --release` (73 tests harus passing semua)
+- **Test**: `cargo test --release` (76 tests harus passing semua)
 - **Push**: `git push origin main` (credential store sudah dikonfigurasi)
 - **Environment**: Termux ARM64 (Android), Rust + TypeScript
 - **Zero dependency**: Frontend murni TypeScript tanpa React/Vue/library external
@@ -107,9 +107,9 @@ mcdash/
 **Fase implementasi**:
 1. **Phase 1**: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
 2. **Phase 2**: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
-3. Phase 3: TPO Overlay + Level Lines ← **SELANJUTNYA**
-4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect)
-5. Phase 5: Polish (mobile, shortcuts, export)
+3. **Phase 3**: TPO Overlay + Level Lines (✅ Selesai)
+4. **Phase 4**: Drawing Tools (Trendline, Fib, HLine, Rect) ← **SELANJUTNYA**
+5. **Phase 5**: Polish (mobile, shortcuts, export)
 
 **Keputusan teknis yang sudah diambil**:
 - Layout: Price Y-axis (vertikal), Time X-axis (horizontal) — standar candlestick

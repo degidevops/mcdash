@@ -73,7 +73,7 @@ mcdash/
 - **Bahasa respons**: Selalu dalam Bahasa Indonesia
 - **Sandbox**: Semua command harus pakai `BypassSandbox: true` (Termux ARM64 glibc issue)
 - **Build**: `cargo build --release --bin mcdash`
-- **Test**: `cargo test --release` (75 tests: 53 core + 13 server + 8 golden + 1 ts-parity)
+- **Test**: `cargo test --release` (76 tests: 54 core + 13 server + 8 golden + 1 ts-parity)
 - **File links**: Selalu gunakan `file://` markdown links
 - **Git**: Credential helper `store` sudah dikonfigurasi (`~/.git-credentials`)
 
@@ -103,8 +103,8 @@ mcdash/
 - **Fase**:
   1. Phase 1: Candlestick + Volume + Zoom/Pan + Realtime (✅ Selesai)
   2. Phase 2: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
-  3. Phase 3: TPO Overlay + Level Lines ← **SELANJUTNYA**
-  4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect)
+  3. Phase 3: TPO Overlay + Level Lines (✅ Selesai)
+  4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect) ← **SELANJUTNYA**
   5. Phase 5: Polish (mobile, shortcuts, export)
 
 **Fitur utama yang diminta**:

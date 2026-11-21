@@ -489,6 +489,46 @@ impl Period {
     pub fn va_rows(&self) -> i64 {
         if self.cnt.is_empty() { 0 } else { self.va_up - self.va_dn + 1 }
     }
+
+    /// Ekspor representasi baris-baris TPO untuk rendering overlay di chart.
+    pub fn tpo_rows(&self) -> Vec<TpoRowSnap> {
+        if !self.valid || self.cnt.is_empty() {
+            return vec![];
+        }
+        const L: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        let mut out = Vec::with_capacity(self.n_bins as usize);
+        for i in 0..self.n_bins {
+            let row = self.min_bin + i;
+            let price = row as f64 * self.tick;
+            let count = self.cnt[i as usize];
+            let letters: String = (0..self.ra.len())
+                .filter(|&k| self.ra[k] <= row && row <= self.rb[k])
+                .map(|k| L[k % L.len()] as char)
+                .collect();
+            out.push(TpoRowSnap {
+                price,
+                count,
+                letters,
+                is_poc: i == self.poc_i,
+                is_vah: i == self.va_up,
+                is_val: i == self.va_dn,
+                in_va: i >= self.va_dn && i <= self.va_up,
+            });
+        }
+        out
+    }
+}
+
+/// Data satu baris harga pada histogram TPO untuk chart overlay.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub struct TpoRowSnap {
+    pub price: f64,
+    pub count: i64,
+    pub letters: String,
+    pub is_poc: bool,
+    pub is_vah: bool,
+    pub is_val: bool,
+    pub in_va: bool,
 }
 
 #[cfg(test)]
@@ -597,5 +637,23 @@ mod tests {
         assert!(p_atas.valid);
         // Huruf C aktif di 110, maka 110 adalah baris aktif terakhir
         assert_eq!(p_atas.poc, 110.0);
+    }
+
+    #[test]
+    fn tpo_rows_returns_valid_structure() {
+        let mut p = Period::new(0, 3600);
+        p.tick = 1.0;
+        p.add_bar(0, 100.0, 102.0, 100.0, 1800, Some(101.0));
+        p.add_bar(1800, 101.0, 103.0, 101.0, 1800, Some(102.0));
+        p.compute(70.0, 80, 0.01, VaMethod::TwoRows, VaBound::Center, PocRule::Mid, VaTieBreak::Up, VaStop::Ceil);
+
+        let rows = p.tpo_rows();
+        assert!(!rows.is_empty());
+        assert!(rows.iter().any(|r| r.is_poc));
+        assert!(rows.iter().any(|r| r.in_va));
+        for r in &rows {
+            assert!(r.count > 0);
+            assert!(!r.letters.is_empty());
+        }
     }
 }

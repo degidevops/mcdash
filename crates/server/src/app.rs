@@ -29,6 +29,7 @@ pub struct Shared {
     pub snap_frame: Option<String>,
     pub tick: Option<TickState>,
     pub chart_bars: HashMap<i64, mcdash_core::Bars>,
+    pub chart_tpo: Option<mcdash_core::ChartTpoResponse>,
 }
 
 pub struct App {

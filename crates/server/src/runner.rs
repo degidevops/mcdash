@@ -521,6 +521,7 @@ impl Runner {
         if self.opts.text {
             println!("{}", format_text(&snap));
         }
+        let chart_tpo = self.engine.as_ref().map(|e| e.chart_tpo());
         {
             let mut sh = self.app.shared.write().unwrap();
             sh.tick = self.tick.map(|(p, wall)| TickState { p, wall, bias_json: Some(self.last_bias.clone()) });
@@ -528,6 +529,7 @@ impl Runner {
             sh.snap = Some(snap);
             sh.snap_frame = Some(frame.clone());
             sh.chart_bars = self.bars.clone();
+            sh.chart_tpo = chart_tpo;
         }
         self.last_meta = now_f();
         let _ = self.app.tx.send(frame);

@@ -8,6 +8,7 @@ import { VolumeRenderer } from './volume.js';
 import { GridRenderer } from './grid.js';
 import { AxisRenderer } from './axis.js';
 import { CrosshairRenderer } from './crosshair.js';
+import { TpoRenderer } from './tpo.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
 import { fmtPrice, fmtPct, decimalsOf } from './util.js';
@@ -26,6 +27,8 @@ export class ChartApp {
   private pxEl!: HTMLElement;
   private chgEl!: HTMLElement;
   private btnFollowEl!: HTMLElement;
+  private btnTpoEl!: HTMLElement;
+  private btnNPocEl!: HTMLElement;
 
   private glCtx!: GLCtx;
   private vp = new Viewport();
@@ -36,6 +39,7 @@ export class ChartApp {
   private grid = new GridRenderer();
   private axis = new AxisRenderer();
   private crosshair = new CrosshairRenderer();
+  private tpo = new TpoRenderer();
   private panzoom!: PanZoom;
   private client!: ChartClient;
 
@@ -60,6 +64,8 @@ export class ChartApp {
     this.pxEl = document.getElementById('px')!;
     this.chgEl = document.getElementById('chg')!;
     this.btnFollowEl = document.getElementById('btnFollow')!;
+    this.btnTpoEl = document.getElementById('btnTpo')!;
+    this.btnNPocEl = document.getElementById('btnNPoc')!;
 
     // WebGL context first
     this.glCtx = initGL(this.glCanvas);
@@ -73,6 +79,7 @@ export class ChartApp {
       (bars) => { this.bars.load(bars); this.fitAndRender(); },
       (price) => { this.bars.updateLast(price); this.updatePrice(price); this.markDirty(); },
       (connected) => { this.dotEl.className = connected ? 'ok' : ''; },
+      (tpoData) => { this.tpo.setData(tpoData); this.markDirty(); },
     );
 
     // PanZoom with Y-axis drag support
@@ -89,6 +96,23 @@ export class ChartApp {
     // Reset view / auto-follow button
     if (this.btnFollowEl) {
       this.btnFollowEl.addEventListener('click', () => this.resetToLive());
+    }
+
+    // TPO and nPOC buttons
+    if (this.btnTpoEl) {
+      this.btnTpoEl.addEventListener('click', () => {
+        const mode = this.tpo.toggleProfile();
+        this.btnTpoEl.textContent = `📊 TPO: ${mode}`;
+        this.btnTpoEl.classList.toggle('on', mode !== 'OFF');
+        this.markDirty();
+      });
+    }
+    if (this.btnNPocEl) {
+      this.btnNPocEl.addEventListener('click', () => {
+        const on = this.tpo.toggleNPOC();
+        this.btnNPocEl.classList.toggle('on', on);
+        this.markDirty();
+      });
     }
 
     // TF buttons
@@ -112,7 +136,13 @@ export class ChartApp {
     const loadData = async (retry = 0) => {
       this.statusEl.textContent = retry > 0 ? `Menunggu data dari Binance… (${retry})` : 'Memuat data…';
       try {
-        const bars = await this.client.fetchBars(this.tf);
+        const [bars, tpo] = await Promise.all([
+          this.client.fetchBars(this.tf),
+          this.client.fetchTpo().catch(() => null),
+        ]);
+        if (tpo) {
+          this.tpo.setData(tpo);
+        }
         if (bars.length > 0) {
           this.bars.load(bars);
           this.openPrice = bars[0].o;
@@ -167,6 +197,25 @@ export class ChartApp {
           this.panzoom.setAutoFollow(false);
           this.markDirty();
           break;
+        case 'p':
+        case 'P': {
+          const mode = this.tpo.toggleProfile();
+          if (this.btnTpoEl) {
+            this.btnTpoEl.textContent = `📊 TPO: ${mode}`;
+            this.btnTpoEl.classList.toggle('on', mode !== 'OFF');
+          }
+          this.markDirty();
+          break;
+        }
+        case 'n':
+        case 'N': {
+          const on = this.tpo.toggleNPOC();
+          if (this.btnNPocEl) {
+            this.btnNPocEl.classList.toggle('on', on);
+          }
+          this.markDirty();
+          break;
+        }
       }
     });
   }
@@ -313,6 +362,9 @@ export class ChartApp {
     // Draw grid (overlay canvas)
     this.ovCtx.clearRect(0, 0, vp.w, vp.h);
     grid.draw(this.ovCtx, vp, this.tf);
+
+    // Draw TPO overlay (blocks, level lines, separators, nPOC)
+    this.tpo.draw(this.ovCtx, vp, bars);
 
     // Draw crosshair on overlay
     crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);

@@ -11,8 +11,8 @@ pub mod util;
 pub mod wire;
 
 pub use calendar::{Calendar, Mode};
-pub use engine::{format_text, TpoEngine, DAYS_ID};
-pub use period::{Period, PocRule, VaBound, VaMethod, VaStop, VaTieBreak};
+pub use engine::{format_text, ChartNakedLevel, ChartTpoPeriod, ChartTpoProfile, ChartTpoResponse, TpoEngine, DAYS_ID};
+pub use period::{Period, PocRule, TpoRowSnap, VaBound, VaMethod, VaStop, VaTieBreak};
 pub use profile::{default_profiles, ProfileCfg};
 pub use series::{Bar, Bars, Series};
 pub use snapshot::*;
