@@ -43,6 +43,9 @@ export class ChartApp {
   private btnCloseShortcutsEl!: HTMLElement;
   private chartMainEl!: HTMLElement;
   private btnClearDrawingsEl!: HTMLElement;
+  private btnDeleteSelectedEl: HTMLButtonElement | null = null;
+  private btnDrawColorEl: HTMLButtonElement | null = null;
+  private dtColorDotEl: HTMLElement | null = null;
 
   // Bottom Status Bar elements (Informasi Tanggal & Waktu di Bawah)
   private sbTimeEl: HTMLElement | null = null;
@@ -54,7 +57,9 @@ export class ChartApp {
   private sbVolEl: HTMLElement | null = null;
   private sbTfEl: HTMLElement | null = null;
 
-  private glCtx!: GLCtx;
+  private glCtx: GLCtx | null = null;
+  private hasWebGL = true;
+  private readonly DRAW_COLORS = ['#2962FF', '#EF5350', '#FFD700', '#00BCD4', '#26A69A', '#AB47BC', '#FFFFFF'];
   private vp = new Viewport();
   private bars = new BarBuffer();
 
@@ -124,6 +129,9 @@ export class ChartApp {
     this.btnCloseShortcutsEl = document.getElementById('btnCloseShortcuts')!;
     this.chartMainEl = document.getElementById('chartMain')!;
     this.btnClearDrawingsEl = document.getElementById('btnClearDrawings')!;
+    this.btnDeleteSelectedEl = document.getElementById('btnDeleteSelected') as HTMLButtonElement | null;
+    this.btnDrawColorEl = document.getElementById('btnDrawColor') as HTMLButtonElement | null;
+    this.dtColorDotEl = document.getElementById('dtColorDot');
 
     // Bottom Status Bar (Informasi Tanggal & Waktu di Bawah)
     this.sbTimeEl = document.getElementById('sbTime');
@@ -142,8 +150,15 @@ export class ChartApp {
     this.bindDrawingMouse();
     this.bindDrawingTouch();
 
-    // WebGL context first
-    this.glCtx = initGL(this.glCanvas);
+    // WebGL context first (with Canvas 2D fallback support)
+    try {
+      this.glCtx = initGL(this.glCanvas);
+      this.hasWebGL = true;
+    } catch (err) {
+      console.warn('WebGL2 not available, falling back to Canvas 2D renderer:', err);
+      this.glCtx = null;
+      this.hasWebGL = false;
+    }
 
     // Size canvases (after glCtx is ready)
     this.resize();
@@ -157,7 +172,7 @@ export class ChartApp {
       (tpoData) => { this.tpo.setData(tpoData); this.markDirty(); },
     );
 
-    // PanZoom with X and Y axis drag & zoom support
+    // PanZoom with X and Y axis drag & zoom support and double-click auto-fit
     this.panzoom = new PanZoom(
       document.getElementById('chartMain')!,
       document.getElementById('yAxis')!,
@@ -168,6 +183,7 @@ export class ChartApp {
       () => { this.crosshair.hide(); this.markDirty(); },
       (follow) => this.updateAutoFollowBtn(follow),
       () => this.isInteractingWithDrawing(),
+      () => this.resetToLive(),
     );
 
     // Live bar timer tick every second for Y-axis countdown
@@ -356,6 +372,7 @@ export class ChartApp {
             this.setTool(null);
           } else if (this.drawingStore.selectedId) {
             this.drawingStore.setSelected(null);
+            this.updateDrawingSelectionUI();
             this.markDirty();
           }
           break;
@@ -364,6 +381,7 @@ export class ChartApp {
           if (this.drawingStore.selectedId) {
             this.drawingStore.removeDrawing(this.drawingStore.selectedId);
             this.drawingStore.saveToStorage(this.symbol);
+            this.updateDrawingSelectionUI();
             this.markDirty();
           }
           break;
@@ -386,14 +404,34 @@ export class ChartApp {
       });
     }
 
+    if (this.btnDeleteSelectedEl) {
+      this.btnDeleteSelectedEl.addEventListener('click', () => {
+        if (this.drawingStore.selectedId) {
+          this.drawingStore.removeDrawing(this.drawingStore.selectedId);
+          this.drawingStore.saveToStorage(this.symbol);
+          this.updateDrawingSelectionUI();
+          this.markDirty();
+        }
+      });
+    }
+
+    if (this.btnDrawColorEl) {
+      this.btnDrawColorEl.addEventListener('click', () => {
+        this.cycleDrawingColor();
+      });
+    }
+
     if (this.btnClearDrawingsEl) {
       this.btnClearDrawingsEl.addEventListener('click', () => {
         this.drawingStore.clearAll();
         this.drawingStore.saveToStorage(this.symbol);
         this.setTool(null);
+        this.updateDrawingSelectionUI();
         this.markDirty();
       });
     }
+
+    this.updateDrawingSelectionUI();
   }
 
   private setTool(tool: DrawingType | null): void {
@@ -445,6 +483,7 @@ export class ChartApp {
       if (hit) {
         e.stopPropagation();
         this.drawingStore.setSelected(hit.drawing.id);
+        this.updateDrawingSelectionUI();
         const d = hit.drawing;
         const startPointsScreen = d.points.map(pt => ({
           x: timeToScreenX(pt.time, this.vp, this.bars),
@@ -466,6 +505,7 @@ export class ChartApp {
 
       if (this.drawingStore.selectedId) {
         this.drawingStore.setSelected(null);
+        this.updateDrawingSelectionUI();
         this.markDirty();
       }
     }, true);
@@ -615,6 +655,7 @@ export class ChartApp {
         e.preventDefault();
         e.stopPropagation();
         this.drawingStore.setSelected(hit.drawing.id);
+        this.updateDrawingSelectionUI();
         const d = hit.drawing;
         const startPointsScreen = d.points.map(pt => ({
           x: timeToScreenX(pt.time, this.vp, this.bars),
@@ -742,7 +783,7 @@ export class ChartApp {
 
     if (tool === 'hline') {
       const drawing = createDrawing('hline', [{ time, price }], {
-        color: '#787B86',
+        color: this.drawingStore.defaultStyle.color,
         width: 1.5,
         dash: [4, 4],
       });
@@ -750,6 +791,7 @@ export class ChartApp {
       this.drawingStore.setSelected(drawing.id);
       this.drawingStore.cancelPending();
       this.setTool(null);
+      this.updateDrawingSelectionUI();
       this.drawingStore.saveToStorage(this.symbol);
       this.markDirty();
       return;
@@ -757,7 +799,7 @@ export class ChartApp {
 
     if (tool === 'vline') {
       const drawing = createDrawing('vline', [{ time, price }], {
-        color: '#787B86',
+        color: this.drawingStore.defaultStyle.color,
         width: 1.5,
         dash: [4, 4],
       });
@@ -765,6 +807,7 @@ export class ChartApp {
       this.drawingStore.setSelected(drawing.id);
       this.drawingStore.cancelPending();
       this.setTool(null);
+      this.updateDrawingSelectionUI();
       this.drawingStore.saveToStorage(this.symbol);
       this.markDirty();
       return;
@@ -786,13 +829,13 @@ export class ChartApp {
     const p1 = this.drawingStore.pendingPoints[0];
     const p2 = { time, price };
 
-    let style: Partial<DrawingStyle> = { color: '#2962FF', width: 2 };
+    let style: Partial<DrawingStyle> = { color: this.drawingStore.defaultStyle.color, width: 2 };
     if (tool === 'fibonacci') {
-      style = { color: '#9C27B0', width: 1 };
+      style = { color: this.drawingStore.defaultStyle.color, width: 1 };
     } else if (tool === 'rectangle') {
-      style = { color: '#2962FF', width: 1.5 };
+      style = { color: this.drawingStore.defaultStyle.color, width: 1.5 };
     } else if (tool === 'trendline') {
-      style = { color: '#2962FF', width: 2 };
+      style = { color: this.drawingStore.defaultStyle.color, width: 2 };
     }
 
     const drawing = createDrawing(tool, [p1, p2], style);
@@ -800,14 +843,15 @@ export class ChartApp {
     this.drawingStore.setSelected(drawing.id);
     this.drawingStore.cancelPending();
     this.setTool(null);
+    this.updateDrawingSelectionUI();
     this.drawingStore.saveToStorage(this.symbol);
     this.markDirty();
   }
 
   /** Export chart as high-resolution PNG image */
   private exportPNG(): void {
-    const totalW = this.glCanvas.width + this.yCanvas.width;
-    const totalH = this.glCanvas.height + this.xCanvas.height;
+    const totalW = this.ovCanvas.width + this.yCanvas.width;
+    const totalH = this.ovCanvas.height + this.xCanvas.height;
 
     const exportCanvas = document.createElement('canvas');
     exportCanvas.width = totalW;
@@ -815,31 +859,34 @@ export class ChartApp {
     const ctx = exportCanvas.getContext('2d');
     if (!ctx) return;
 
-    // Background
+    // Background #131722
     ctx.fillStyle = '#131722';
     ctx.fillRect(0, 0, totalW, totalH);
 
-    // 1. WebGL Candles and Volume
-    ctx.drawImage(this.glCanvas, 0, 0);
+    // 1. WebGL Candles and Volume if available
+    if (this.hasWebGL && this.glCanvas) {
+      ctx.drawImage(this.glCanvas, 0, 0);
+    }
 
-    // 2. 2D Overlay (TPO, Drawings, Crosshair)
+    // 2. 2D Overlay (Watermark, Candles Fallback, TPO, Extrema, Drawings, Crosshair)
     ctx.drawImage(this.ovCanvas, 0, 0);
 
     // 3. Y Axis
-    ctx.drawImage(this.yCanvas, this.glCanvas.width, 0);
+    ctx.drawImage(this.yCanvas, this.ovCanvas.width, 0);
 
     // 4. X Axis
-    ctx.drawImage(this.xCanvas, 0, this.glCanvas.height);
+    ctx.drawImage(this.xCanvas, 0, this.ovCanvas.height);
 
     // 5. Watermark ATAS / MCDash
     ctx.font = 'bold 12px ui-monospace,SFMono-Regular,monospace';
-    ctx.fillStyle = 'rgba(120, 123, 134, 0.45)';
+    ctx.fillStyle = 'rgba(207, 216, 220, 0.75)';
     ctx.textAlign = 'right';
-    ctx.fillText(`MCDash • ${this.symbol} • ${this.tf}m`, totalW - 14, totalH - 10);
+    const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    ctx.fillText(`MCDash • ${this.symbol} • ${this.tfLabel(this.tf)} • ${nowIso} UTC`, totalW - 14, totalH - 10);
 
     // Trigger download
     const link = document.createElement('a');
-    link.download = `mcdash-${this.symbol.toLowerCase()}-${this.tf}m-${Date.now()}.png`;
+    link.download = `mcdash-${this.symbol.toLowerCase()}-${this.tfLabel(this.tf)}-${Date.now()}.png`;
     link.href = exportCanvas.toDataURL('image/png');
     link.click();
   }
@@ -960,11 +1007,16 @@ export class ChartApp {
 
   private render(): void {
     const { glCtx, vp, bars, candles, volume, grid, axis, crosshair } = this;
-    const gl = glCtx.gl;
+    const gl = glCtx?.gl;
 
-    // Clear WebGL canvas
-    gl.clearColor(0.075, 0.09, 0.133, 1.0); // #131722
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (gl) {
+      // Clear WebGL canvas
+      gl.clearColor(0.075, 0.09, 0.133, 1.0); // #131722
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+
+    // Clear overlay canvas
+    this.ovCtx.clearRect(0, 0, vp.w, vp.h);
 
     if (bars.len === 0) return;
 
@@ -974,37 +1026,45 @@ export class ChartApp {
       if (lo < Infinity) vp.fitY(lo, hi);
     }
 
-    const view = vp.clipView();
+    // 1. Watermark ATAS / DeepChart background signature
+    this.drawWatermark(vp);
 
-    // Draw candles
-    candles.rebuild(bars, vp);
-    candles.draw(glCtx, view);
+    // 2. Candles & Volume (WebGL if supported, otherwise Canvas 2D fallback)
+    if (this.hasWebGL && glCtx) {
+      const view = vp.clipView();
+      candles.rebuild(bars, vp);
+      candles.draw(glCtx, view);
 
-    // Draw volume
-    volume.rebuild(bars, vp);
-    volume.draw(glCtx, view);
+      volume.rebuild(bars, vp);
+      volume.draw(glCtx, view);
+    } else {
+      this.drawCandles2D(vp, bars);
+      this.drawVolume2D(vp, bars);
+    }
 
-    // Draw grid (overlay canvas)
-    this.ovCtx.clearRect(0, 0, vp.w, vp.h);
+    // 3. Grid lines
     grid.draw(this.ovCtx, vp, this.tf);
 
-    // Draw TPO overlay (blocks, level lines, separators, nPOC)
+    // 4. Extrema High & Low Markers (ATAS style ▼ High / ▲ Low markers)
+    this.drawExtremaMarkers(vp, bars);
+
+    // 5. Draw TPO overlay (blocks, level lines, separators, nPOC)
     this.tpo.draw(this.ovCtx, vp, bars);
 
-    // Draw user drawings
+    // 6. Draw user drawings
     this.drawingRenderer.draw(this.ovCtx, vp, bars, this.drawingStore);
 
-    // Draw axes first (clears axis canvases)
+    // 7. Draw axes (clears axis canvases)
     const lastBarTs = bars.len > 0 ? bars.t[bars.len - 1] : 0;
     axis.drawY(this.yCtx, vp, this.tickSize, bars.lastPrice(), this.openPrice, lastBarTs, this.tf);
     axis.drawX(this.xCtx, vp, bars, this.tf);
 
-    // Draw crosshair on overlay and price/time badges on axes (on top of axis labels)
+    // 8. Draw crosshair on overlay and price/time badges on axes (on top of axis labels)
     crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);
     crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize, this.tf);
     this.updateBottomBar(bars, vp);
 
-    // Current price horizontal line on overlay
+    // 9. Current price horizontal line on overlay
     const lastP = bars.lastPrice();
     if (lastP > 0 && lastP >= vp.yMin && lastP <= vp.yMax) {
       const y = Math.round(vp.yToScreen(lastP)) + 0.5;
@@ -1022,8 +1082,177 @@ export class ChartApp {
     }
   }
 
+  /** Background symbol & timeframe watermark (khas ATAS / DeepChart) */
+  private drawWatermark(vp: Viewport): void {
+    const dpr = vp.dpr || 1;
+    const ctx = this.ovCtx;
+    const centerX = vp.w / 2;
+    const centerY = vp.chartH / 2;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const fontSize = Math.min(Math.round(vp.w * 0.12), Math.round(64 * dpr));
+    ctx.font = `900 ${fontSize}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.038)';
+    ctx.fillText(`${this.symbol} • ${this.tfLabel(this.tf)}`, centerX, centerY - 12 * dpr);
+
+    const subSize = Math.max(Math.round(10 * dpr), Math.round(fontSize * 0.22));
+    ctx.font = `700 ${subSize}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.024)';
+    ctx.fillText('MCDASH • ATAS ORDER FLOW PROFILE', centerX, centerY + fontSize * 0.42);
+
+    ctx.restore();
+  }
+
+  /** Visible range High / Low extrema markers (panah ▼ H dan ▲ L khas ATAS) */
+  private drawExtremaMarkers(vp: Viewport, bars: BarBuffer): void {
+    if (bars.len === 0) return;
+    const dpr = vp.dpr || 1;
+    const ctx = this.ovCtx;
+
+    const iStart = Math.max(0, Math.floor(vp.xMin));
+    const iEnd = Math.min(bars.len - 1, Math.ceil(vp.xMax));
+    if (iStart > iEnd) return;
+
+    let maxH = -Infinity;
+    let maxIdx = -1;
+    let minL = Infinity;
+    let minIdx = -1;
+
+    for (let i = iStart; i <= iEnd; i++) {
+      if (bars.h[i] > maxH) {
+        maxH = bars.h[i];
+        maxIdx = i;
+      }
+      if (bars.l[i] < minL) {
+        minL = bars.l[i];
+        minIdx = i;
+      }
+    }
+
+    const dec = decimalsOf(this.tickSize);
+    ctx.save();
+    ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.textAlign = 'center';
+
+    // High marker (panah merah ▼ dan harga)
+    if (maxIdx >= 0) {
+      const x = vp.xToScreen(maxIdx);
+      const y = vp.yToScreen(maxH);
+      if (x >= 24 * dpr && x <= vp.w - 24 * dpr && y >= 14 * dpr && y <= vp.chartH) {
+        ctx.fillStyle = '#EF5350';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`▼ H: ${fmtPrice(maxH, dec)}`, x, y - 4 * dpr);
+      }
+    }
+
+    // Low marker (panah hijau ▲ dan harga)
+    if (minIdx >= 0) {
+      const x = vp.xToScreen(minIdx);
+      const y = vp.yToScreen(minL);
+      if (x >= 24 * dpr && x <= vp.w - 24 * dpr && y >= 0 && y <= vp.chartH - 14 * dpr) {
+        ctx.fillStyle = '#26A69A';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`▲ L: ${fmtPrice(minL, dec)}`, x, y + 4 * dpr);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  /** Canvas 2D fallback for candlesticks (used if WebGL2 is not available) */
+  private drawCandles2D(vp: Viewport, bars: BarBuffer): void {
+    const ctx = this.ovCtx;
+    const dpr = vp.dpr || 1;
+    const iStart = Math.max(0, Math.floor(vp.xMin) - 1);
+    const iEnd = Math.min(bars.len - 1, Math.ceil(vp.xMax) + 1);
+
+    const candleWidth = Math.max(1, (vp.w / Math.max(1, vp.visibleBars)) * 0.75);
+    const halfW = candleWidth / 2;
+
+    ctx.save();
+    for (let i = iStart; i <= iEnd; i++) {
+      const o = bars.o[i], h = bars.h[i], l = bars.l[i], c = bars.c[i];
+      const x = vp.xToScreen(i);
+      const bull = c >= o;
+      const color = bull ? '#26A69A' : '#EF5350';
+
+      const yO = vp.yToScreen(o);
+      const yC = vp.yToScreen(c);
+      const yH = vp.yToScreen(h);
+      const yL = vp.yToScreen(l);
+
+      // Wick
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1, 1 * dpr);
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x) + 0.5, Math.round(yH));
+      ctx.lineTo(Math.round(x) + 0.5, Math.round(yL));
+      ctx.stroke();
+
+      // Body
+      const topY = Math.min(yO, yC);
+      const bodyH = Math.max(1, Math.abs(yO - yC));
+      ctx.fillStyle = color;
+      ctx.fillRect(x - halfW, topY, candleWidth, bodyH);
+    }
+    ctx.restore();
+  }
+
+  /** Canvas 2D fallback for volume bars (used if WebGL2 is not available) */
+  private drawVolume2D(vp: Viewport, bars: BarBuffer): void {
+    const ctx = this.ovCtx;
+    const iStart = Math.max(0, Math.floor(vp.xMin) - 1);
+    const iEnd = Math.min(bars.len - 1, Math.ceil(vp.xMax) + 1);
+
+    let maxVol = 0;
+    for (let i = iStart; i <= iEnd; i++) {
+      if (bars.v[i] > maxVol) maxVol = bars.v[i];
+    }
+    if (maxVol <= 0) return;
+
+    const volH = vp.chartH * vp.volFrac;
+    const candleWidth = Math.max(1, (vp.w / Math.max(1, vp.visibleBars)) * 0.75);
+    const halfW = candleWidth / 2;
+
+    ctx.save();
+    for (let i = iStart; i <= iEnd; i++) {
+      const x = vp.xToScreen(i);
+      const hBar = (bars.v[i] / maxVol) * volH * 0.95;
+      const y = vp.h - hBar;
+      const bull = bars.c[i] >= bars.o[i];
+      ctx.fillStyle = bull ? 'rgba(38, 166, 154, 0.28)' : 'rgba(239, 83, 80, 0.28)';
+      ctx.fillRect(x - halfW, y, candleWidth, hBar);
+    }
+    ctx.restore();
+  }
+
   private updateBottomBar(bars: BarBuffer, vp: Viewport): void {
     if (!this.sbTimeEl || bars.len === 0) return;
+
+    // Interactive guidance when drawing tool is active
+    if (this.drawingStore.activeTool) {
+      const toolTitle = this.toolName(this.drawingStore.activeTool);
+      if (this.drawingStore.pendingPoints.length === 0) {
+        this.sbTimeEl.textContent = `✏️ ${toolTitle}: Sentuh / Klik titik 1 • Esc batal`;
+      } else {
+        this.sbTimeEl.textContent = `✏️ Tarik ke titik 2 untuk menyelesaikan ${toolTitle}`;
+      }
+      return;
+    }
+
+    if (this.drawingStore.selectedId) {
+      this.sbTimeEl.textContent = `📌 1 gambar dipilih • Del / icon tong sampah untuk hapus`;
+    } else {
+      let idx = this.crosshair.visible ? Math.round(vp.screenToX(this.crosshair.mx)) : bars.len - 1;
+      if (idx < 0 || idx >= bars.len) {
+        idx = bars.len - 1;
+      }
+      const ts = bars.t[idx];
+      this.sbTimeEl.textContent = `${fmtDate(ts, this.tf)}`;
+    }
 
     let idx = this.crosshair.visible ? Math.round(vp.screenToX(this.crosshair.mx)) : bars.len - 1;
     if (idx < 0 || idx >= bars.len) {
@@ -1036,10 +1265,7 @@ export class ChartApp {
     const pct = o !== 0 ? (diff / o) * 100 : 0;
     const bull = diff >= 0;
     const cls = bull ? 'up' : 'dn';
-    const ts = bars.t[idx];
-    const timeStr = fmtDate(ts, this.tf);
 
-    this.sbTimeEl.textContent = `${timeStr}`;
     if (this.sbOEl) this.sbOEl.textContent = fmtPrice(o, dec);
     if (this.sbHEl) this.sbHEl.textContent = fmtPrice(h, dec);
     if (this.sbLEl) this.sbLEl.textContent = fmtPrice(l, dec);
@@ -1052,6 +1278,52 @@ export class ChartApp {
       this.sbChgEl.className = `val ${cls}`;
     }
     if (this.sbVolEl) this.sbVolEl.textContent = formatVol(v);
+  }
+
+  private updateDrawingSelectionUI(): void {
+    const selected = this.drawingStore.selectedId ? this.drawingStore.getDrawing(this.drawingStore.selectedId) : null;
+    if (this.btnDeleteSelectedEl) {
+      this.btnDeleteSelectedEl.disabled = !selected;
+      this.btnDeleteSelectedEl.style.opacity = selected ? '1' : '0.3';
+    }
+    if (selected && this.dtColorDotEl) {
+      this.dtColorDotEl.style.backgroundColor = selected.style.color;
+    } else if (this.dtColorDotEl) {
+      this.dtColorDotEl.style.backgroundColor = this.drawingStore.defaultStyle.color;
+    }
+  }
+
+  private cycleDrawingColor(): void {
+    const curColor = this.drawingStore.defaultStyle.color.toUpperCase();
+    const idx = this.DRAW_COLORS.findIndex(c => c.toUpperCase() === curColor);
+    const nextIdx = (idx + 1) % this.DRAW_COLORS.length;
+    const nextColor = this.DRAW_COLORS[nextIdx];
+
+    this.drawingStore.defaultStyle.color = nextColor;
+    if (this.dtColorDotEl) {
+      this.dtColorDotEl.style.backgroundColor = nextColor;
+    }
+
+    // If an object is currently selected, also update its color
+    if (this.drawingStore.selectedId) {
+      const selected = this.drawingStore.getDrawing(this.drawingStore.selectedId);
+      if (selected) {
+        selected.style.color = nextColor;
+        this.drawingStore.saveToStorage(this.symbol);
+        this.markDirty();
+      }
+    }
+  }
+
+  private toolName(t: DrawingType): string {
+    switch (t) {
+      case 'trendline': return 'Trendline';
+      case 'hline': return 'Horizontal Line';
+      case 'vline': return 'Vertical Line';
+      case 'fibonacci': return 'Fibonacci';
+      case 'rectangle': return 'Rectangle';
+      default: return t;
+    }
   }
 
   private tfLabel(tf: number): string {

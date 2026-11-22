@@ -23,6 +23,7 @@ export class PanZoom {
     private onCrosshairLeave: () => void,
     private onAutoFollowChange?: (follow: boolean) => void,
     private isInteracting?: () => boolean,
+    private onResetView?: () => void,
   ) {
     this.bindMouse();
     this.bindXAxis();
@@ -95,6 +96,11 @@ export class PanZoom {
       if (!this.dragging && !this.draggingX && !this.draggingY) {
         this.onCrosshairLeave();
       }
+    });
+
+    this.el.addEventListener('dblclick', (e: MouseEvent) => {
+      if (e.button !== 0 || this.isInteracting?.()) return;
+      this.onResetView?.();
     });
   }
 
@@ -248,6 +254,7 @@ export class PanZoom {
 
   private bindTouch(): void {
     let lastTouches: Touch[] = [];
+    let lastTapTime = 0;
 
     this.el.addEventListener('touchstart', (e: TouchEvent) => {
       if (this.isInteracting?.()) {
@@ -255,6 +262,18 @@ export class PanZoom {
         return;
       }
       e.preventDefault();
+
+      // Double-tap to reset view
+      if (e.touches.length === 1) {
+        const now = Date.now();
+        if (now - lastTapTime < 320) {
+          this.onResetView?.();
+          lastTapTime = 0;
+          return;
+        }
+        lastTapTime = now;
+      }
+
       lastTouches = Array.from(e.touches);
       const dpr = window.devicePixelRatio || 1;
       if (e.touches.length === 1) {

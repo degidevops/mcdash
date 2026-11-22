@@ -8,6 +8,7 @@ export class PanZoom {
     onCrosshairLeave;
     onAutoFollowChange;
     isInteracting;
+    onResetView;
     dragging = false;
     draggingX = false;
     draggingY = false;
@@ -16,7 +17,7 @@ export class PanZoom {
     lastDragX = 0;
     lastDragY = 0;
     autoFollow = true;
-    constructor(el, yAxisEl, xAxisEl, vp, onChange, onCrosshair, onCrosshairLeave, onAutoFollowChange, isInteracting) {
+    constructor(el, yAxisEl, xAxisEl, vp, onChange, onCrosshair, onCrosshairLeave, onAutoFollowChange, isInteracting, onResetView) {
         this.el = el;
         this.yAxisEl = yAxisEl;
         this.xAxisEl = xAxisEl;
@@ -26,6 +27,7 @@ export class PanZoom {
         this.onCrosshairLeave = onCrosshairLeave;
         this.onAutoFollowChange = onAutoFollowChange;
         this.isInteracting = isInteracting;
+        this.onResetView = onResetView;
         this.bindMouse();
         this.bindXAxis();
         this.bindYAxis();
@@ -94,6 +96,11 @@ export class PanZoom {
             if (!this.dragging && !this.draggingX && !this.draggingY) {
                 this.onCrosshairLeave();
             }
+        });
+        this.el.addEventListener('dblclick', (e) => {
+            if (e.button !== 0 || this.isInteracting?.())
+                return;
+            this.onResetView?.();
         });
     }
     /** X-axis drag to zoom time scale (candle spacing) */
@@ -230,12 +237,23 @@ export class PanZoom {
     }
     bindTouch() {
         let lastTouches = [];
+        let lastTapTime = 0;
         this.el.addEventListener('touchstart', (e) => {
             if (this.isInteracting?.()) {
                 // If drawing/tool interaction is active, let drawing handler take over
                 return;
             }
             e.preventDefault();
+            // Double-tap to reset view
+            if (e.touches.length === 1) {
+                const now = Date.now();
+                if (now - lastTapTime < 320) {
+                    this.onResetView?.();
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+            }
             lastTouches = Array.from(e.touches);
             const dpr = window.devicePixelRatio || 1;
             if (e.touches.length === 1) {

@@ -96,7 +96,7 @@ mcdash/
 
 ## Milestone Berikutnya
 
-### 🔲 M3: Professional Trading Chart (IN PROGRESS)
+### ✅ M3: Professional Trading Chart (SELESAI)
 - **Goal**: Halaman `/chart` — full professional trading chart bergaya ATAS/DeepChart
 - **Arsitektur**: Hybrid WebGL2 + Canvas 2D, 3-layer rendering
 - **Proposal**: Lihat `.agents/docs/chart-proposal.md`
@@ -105,7 +105,7 @@ mcdash/
   2. Phase 2: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
   3. Phase 3: TPO Overlay + Level Lines (✅ Selesai)
   4. Phase 4: Drawing Tools (Trendline, Fib, HLine, Rect) (✅ Selesai)
-  5. Phase 5: Polish (mobile, shortcuts, export) ← **SELANJUTNYA**
+  5. Phase 5: Polish (mobile gestures, shortcuts, export PNG, ATAS watermark, extrema markers, 2D fallback, drawing palette) (✅ Selesai)
 
 **Fitur utama yang diminta**:
 - Candlestick chart + Volume bars + TPO/Market Profile overlay (gaya ATAS)
