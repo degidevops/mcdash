@@ -1,4 +1,5 @@
 import { niceStep, niceTimeStep, fmtPrice, fmtTime, fmtDateShort, isSameDay, decimalsOf } from './util.js';
+import { settings } from './settings.js';
 const TEXT_COLOR = '#CFD8DC';
 const DATE_COLOR = '#FFFFFF';
 const BULL_COLOR = '#26A69A';
@@ -17,7 +18,7 @@ export class AxisRenderer {
         const step = niceStep(priceRange, Math.max(2, Math.floor(vp.chartH / (45 * dpr))));
         const dec = Math.max(decimalsOf(tickSize), decimalsOf(step));
         const pStart = Math.ceil(vp.yMin / step) * step;
-        ctx.font = `${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `${Math.round(11 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = TEXT_COLOR;
@@ -34,11 +35,10 @@ export class AxisRenderer {
             ctx.stroke();
             ctx.fillText(fmtPrice(p, dec), 7 * dpr, y);
         }
-        // Current price marker (ATAS / DeepChart style arrow tag)
+        // Current price marker — gaya DeepChart: badge teal terisi (arah dilihat dari candle/legend)
         if (lastPrice > 0 && lastPrice >= vp.yMin && lastPrice <= vp.yMax) {
             const y = Math.round(vp.yToScreen(lastPrice));
-            const bull = lastPrice >= openPrice;
-            const bg = bull ? BULL_COLOR : BEAR_COLOR;
+            const bg = '#26A69A';
             const h2 = 10 * dpr;
             ctx.fillStyle = bg;
             ctx.beginPath();
@@ -50,12 +50,13 @@ export class AxisRenderer {
             ctx.closePath();
             ctx.fill();
             ctx.fillStyle = '#FFFFFF';
-            ctx.font = `bold ${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+            ctx.font = `bold ${Math.round(11 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(fmtPrice(lastPrice, dec), (w + 4 * dpr) / 2, y);
-            // Countdown Bar Timer (Teks Waktu di Sumbu Y di bawah harga)
-            if (lastBarTs > 0 && tf > 0) {
+            // Countdown Bar Timer (Teks Waktu di Sumbu Y di bawah harga) — bisa dimatikan
+            // dari Panel Pengaturan Chart.
+            if (settings.data.showCountdown && lastBarTs > 0 && tf > 0) {
                 const nowSec = Math.floor(Date.now() / 1000);
                 const nextBarTs = lastBarTs + tf * 60;
                 const remSec = Math.max(0, nextBarTs - nowSec);
@@ -73,7 +74,7 @@ export class AxisRenderer {
                     ctx.lineWidth = 1 * dpr;
                     ctx.strokeRect(3 * dpr + 0.5, timeY + 0.5, w - 6 * dpr - 1, pillH - 1);
                     ctx.fillStyle = '#B2B5BE';
-                    ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                    ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(`⏱ ${timeStr}`, w / 2, timeY + pillH / 2);
@@ -134,32 +135,38 @@ export class AxisRenderer {
             if (isDailyOrHigher) {
                 // Daily / Weekly: Line 1 = "21 Nov", Line 2 = "2026"
                 const d = new Date(ts * 1000);
-                ctx.font = `bold ${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                ctx.font = `bold ${Math.round(11 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                 ctx.fillStyle = DATE_COLOR;
                 ctx.fillText(fmtDateShort(ts), x, 11 * dpr);
-                ctx.font = `${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                ctx.font = `${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                 ctx.fillStyle = TEXT_COLOR;
                 ctx.fillText(String(d.getFullYear()), x, 22 * dpr);
             }
             else if (isNewDay || lastLabelX === -999) {
-                // Day boundary or first visible label: prominent date tag with time
+                // Day boundary or first visible label: tanggal BERBINGKAI (gaya DeepChart) + waktu sesi
                 ctx.save();
                 const dateStr = fmtDateShort(ts);
                 const timeStr = fmtTime(ts, tf);
-                ctx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                ctx.font = `bold ${Math.round(10.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
+                const dw = ctx.measureText(dateStr).width + 8 * dpr;
+                ctx.fillStyle = '#2A2E39';
+                ctx.fillRect(x - dw / 2, 2 * dpr, dw, 15 * dpr);
+                ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+                ctx.lineWidth = 1 * dpr;
+                ctx.strokeRect(x - dw / 2 + 0.5 * dpr, 2.5 * dpr, dw - 1 * dpr, 14 * dpr);
                 ctx.fillStyle = '#FFFFFF';
-                ctx.fillText(dateStr, x, 10.5 * dpr);
-                ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                ctx.fillText(dateStr, x, 9.5 * dpr);
+                ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                 ctx.fillStyle = '#26A69A'; // Highlighted color for session start
                 ctx.fillText(timeStr, x, 21.5 * dpr);
                 ctx.restore();
             }
             else {
                 // Regular intraday tick: Line 1 = "14:00" (bold), Line 2 = "21 Nov" (date info)
-                ctx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                ctx.font = `bold ${Math.round(10.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                 ctx.fillStyle = DATE_COLOR;
                 ctx.fillText(fmtTime(ts, tf), x, 10.5 * dpr);
-                ctx.font = `${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                ctx.font = `${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                 ctx.fillStyle = TEXT_COLOR;
                 ctx.fillText(fmtDateShort(ts), x, 21.5 * dpr);
             }

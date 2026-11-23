@@ -2,7 +2,7 @@
 import type { GLCtx } from './gl.js';
 import type { BarBuffer } from './data.js';
 import type { Viewport } from './viewport.js';
-import { BULL, BEAR } from './util.js';
+import { settings, hexToRgb01 } from './settings.js';
 
 // Each vertex: (x, y, r, g, b, a) = 6 floats
 // Each candle: body(6 verts) + upper wick(6) + lower wick(6) = 18 verts
@@ -24,14 +24,18 @@ export class CandleRenderer {
 
     let off = 0;
     const bw = vp.barW;
-    const halfBody = bw * 0.38;
+    const halfBody = bw * settings.data.bodyWidth;
     const halfWick = Math.max(bw * 0.06, 0.5) / vp.w * (vp.xMax - vp.xMin); // in world X
+    const bullCol = hexToRgb01(settings.data.candleUp);
+    const bearCol = hexToRgb01(settings.data.candleDown);
 
     for (let i = iMin; i <= iMax; i++) {
       const o = bars.o[i], h = bars.h[i], l = bars.l[i], c = bars.c[i];
       const bull = c >= o;
-      const col = bull ? BULL : BEAR;
-      const cx = i + 0.5; // center x in bar-index space
+      const col = bull ? bullCol : bearCol;
+      // Pusat candle tepat pada indeks bar i — konsisten dengan snap crosshair,
+      // label sumbu X, grid vertikal, dan posisi objek drawing (time→x).
+      const cx = i;
 
       // half-widths in world X coordinates
       const hbX = halfBody / vp.w * (vp.xMax - vp.xMin);

@@ -1,8 +1,7 @@
 // CrosshairRenderer — dashed lines, precision Y/X axis badges + ATAS / DeepChart HUD
 import type { Viewport } from './viewport.js';
 import type { BarBuffer } from './data.js';
-import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf, formatVol } from './util.js';
-import { screenXToTime } from './drawing.js';
+import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf, formatVol, fmtTickParts } from './util.js';
 
 const XH_COLOR = '#9598A1';
 const BG_TAG = '#1E222D';
@@ -38,9 +37,21 @@ export class CrosshairRenderer {
     const dpr = vp.dpr || 1;
     const dec = decimalsOf(tickSize);
 
-    // Smooth 1:1 crosshair following mouse cursor exactly (ATAS / DeepChart style)
-    const cx = Math.round(this.mx) + 0.5;
+    // Garis vertikal di-SNAP ke tengah bar yang ditunjuk — standar chart profesional
+    // (TradingView / ATAS / DeepChart): waktu yang terbaca = waktu bar tsb, bukan
+    // posisi piksel bebas. Garis horizontal tetap 1:1 mengikuti kursor.
+    const ci = bars.len > 0 ? Math.max(0, Math.round(vp.screenToX(this.mx))) : Math.round(vp.screenToX(this.mx));
+    const cx = Math.round(vp.xToScreen(ci)) + 0.5;
     const cy = Math.round(this.my) + 0.5;
+
+    // Timestamp bar yang ditunjuk (ekstrapolasi bila kursor di ruang kosong kanan data)
+    let ts: number;
+    if (bars.len > 0) {
+      if (ci < bars.len) ts = bars.t[ci];
+      else ts = bars.t[bars.len - 1] + (ci - (bars.len - 1)) * tf * 60;
+    } else {
+      ts = Math.floor(Date.now() / 1000);
+    }
 
     // --- Overlay canvas: crisp dashed lines ---
     ovCtx.save();
@@ -55,7 +66,7 @@ export class CrosshairRenderer {
     ovCtx.lineTo(w, cy);
     ovCtx.stroke();
 
-    // Vertical line across chart
+    // Vertical line across chart (di tengah bar ter-snap)
     ovCtx.beginPath();
     ovCtx.moveTo(cx, 0);
     ovCtx.lineTo(cx, h);
@@ -93,45 +104,53 @@ export class CrosshairRenderer {
       yCtx.stroke();
 
       yCtx.fillStyle = '#FFFFFF';
-      yCtx.font = `bold ${Math.round(11 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+      yCtx.font = `bold ${Math.round(11 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
       yCtx.textAlign = 'center';
       yCtx.textBaseline = 'middle';
       yCtx.fillText(label, (yw + 5 * dpr) / 2, this.my);
       yCtx.restore();
     }
 
-    // --- X-axis date & time badge ---
-    const ts = screenXToTime(this.mx, vp, bars);
-    const label = fmtDate(ts, tf);
+    // --- X-axis time & date badge (2 baris: waktu + tanggal) tepat di bawah bar yang ditunjuk ---
+    const parts = fmtTickParts(ts, tf);
     const xh = xCtx.canvas.height;
     const xw = xCtx.canvas.width;
 
     xCtx.save();
-    xCtx.font = `bold ${Math.round(10.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
-    const tw = xCtx.measureText(label).width + 16 * dpr;
-    const clampCx = Math.max(tw / 2, Math.min(xw - tw / 2, cx));
+    xCtx.font = `bold ${Math.round(10.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
+    const twTop = xCtx.measureText(parts.top).width;
+    xCtx.font = `${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
+    const twSub = xCtx.measureText(parts.sub).width;
+    const tw = Math.max(twTop, twSub) + 14 * dpr;
+    const bh = Math.min(27 * dpr, xh - 1);
+    const bx = Math.max(tw / 2, Math.min(xw - tw / 2, cx));
 
     xCtx.fillStyle = BG_TAG;
-    xCtx.fillRect(clampCx - tw / 2, 0, tw, xh);
+    xCtx.fillRect(bx - tw / 2, 0, tw, bh);
     xCtx.strokeStyle = BORDER_TAG;
     xCtx.lineWidth = 1.5 * dpr;
-    xCtx.strokeRect(clampCx - tw / 2 + 0.5, 0.5, tw - 1, xh - 1);
+    xCtx.strokeRect(bx - tw / 2 + 0.5, 0.5, tw - 1, bh - 1);
 
-    xCtx.fillStyle = '#FFFFFF';
     xCtx.textAlign = 'center';
+    xCtx.fillStyle = '#FFFFFF';
+    xCtx.font = `bold ${Math.round(10.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
     xCtx.textBaseline = 'middle';
-    xCtx.fillText(label, clampCx, xh / 2);
+    xCtx.fillText(parts.top, bx, bh * 0.34);
+    xCtx.fillStyle = '#9DB2C7';
+    xCtx.font = `${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
+    xCtx.fillText(parts.sub, bx, bh * 0.72);
     xCtx.restore();
   }
 
-  /** Draw OHLCV info at top-left of the chart (shows hovered bar, or latest bar if crosshair inactive) */
-  drawInfo(el: HTMLElement, bars: BarBuffer, vp: Viewport, tickSize: number, tf: number): void {
+  /** Draw simbol + OHLCV info at top-left of the chart (gaya DeepChart: judul simbol + TF di depan).
+   *  Menampilkan bar yang di-hover crosshair, atau bar terakhir bila crosshair tidak aktif. */
+  drawInfo(el: HTMLElement, bars: BarBuffer, vp: Viewport, tickSize: number, tf: number, title?: string): void {
     if (bars.len === 0) {
-      el.innerHTML = '';
+      el.innerHTML = title ? `<span style="color:#fff;font-weight:700">${title}</span>` : '';
       return;
     }
 
-    let idx = this.visible ? Math.round(vp.screenToX(this.mx)) : bars.len - 1;
+    let idx = this.visible ? Math.max(0, Math.round(vp.screenToX(this.mx))) : bars.len - 1;
     if (idx < 0 || idx >= bars.len) {
       idx = bars.len - 1;
     }
@@ -142,15 +161,14 @@ export class CrosshairRenderer {
     const pct = o !== 0 ? (diff / o) * 100 : 0;
     const bull = diff >= 0;
     const cls = bull ? 'up' : 'dn';
-    const ts = bars.t[idx];
-    const timeStr = fmtDate(ts, tf);
 
-    el.innerHTML = `<span class="iv" style="color:#B2B5BE;font-weight:600">[${timeStr}]</span> `
-      + `<b>O</b> <span class="${cls}">${fmtPrice(o, dec)}</span> `
-      + `<b>H</b> <span class="${cls}">${fmtPrice(h, dec)}</span> `
-      + `<b>L</b> <span class="${cls}">${fmtPrice(l, dec)}</span> `
-      + `<b>C</b> <span class="${cls}">${fmtPrice(c, dec)}</span> `
-      + `<b>Chg</b> <span class="${cls}">${fmtChg(diff, dec)} (${fmtPct(pct)})</span> `
-      + `<b>Vol</b> <span class="iv">${formatVol(v)}</span>`;
+    // Data window gaya DeepChart: SIMBOL · tf  O: H: L: C: Chg: Vol: (label abu, nilai berwarna)
+    el.innerHTML = (title ? `<span class="tt">${title}</span> ` : '')
+      + `<span class="iv">O:</span> <span class="${cls}">${fmtPrice(o, dec)}</span> `
+      + `<span class="iv">H:</span> <span class="${cls}">${fmtPrice(h, dec)}</span> `
+      + `<span class="iv">L:</span> <span class="${cls}">${fmtPrice(l, dec)}</span> `
+      + `<span class="iv">C:</span> <span class="${cls}">${fmtPrice(c, dec)}</span> `
+      + `<span class="iv">Chg:</span> <span class="${cls}">${fmtChg(diff, dec)} (${fmtPct(pct)})</span> `
+      + `<span class="iv">Vol:</span> <span class="iv">${formatVol(v)}</span>`;
   }
 }

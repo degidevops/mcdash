@@ -178,6 +178,9 @@ async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::
 struct ChartSrcOption {
     id: String,
     label: String,
+    /// Simbol aktual sumber ini (mis. OANDA:XAUUSD / XAUUSDT). Dipakai halaman /chart
+    /// untuk judul kiri atas, watermark, dan kunci penyimpanan drawing.
+    symbol: String,
 }
 
 /// GET /api/chart-info → daftar pilihan sumber data untuk dropdown halaman /chart.
@@ -192,14 +195,23 @@ async fn chart_info(State(app): State<Arc<App>>) -> Response {
     } else {
         sh.meta.source.clone()
     };
-    let mut opts = vec![ChartSrcOption { id: "main".into(), label: main_label }];
+    let mut opts = vec![ChartSrcOption { id: "main".into(), label: main_label, symbol: sym.clone() }];
     if primary != CHART_SRC_BINANCE && !sym.is_empty() {
-        opts.push(ChartSrcOption { id: "binance".into(), label: format!("Binance · {}", crate::app::chart_binance_symbol(&sym)) });
+        let bsym = crate::app::chart_binance_symbol(&sym);
+        opts.push(ChartSrcOption {
+            id: "binance".into(),
+            label: format!("Binance · {bsym}"),
+            symbol: bsym,
+        });
     }
     if primary != CHART_SRC_TV {
         let tv_sym = if sh.chart_tv_symbol.is_empty() { sym.clone() } else { sh.chart_tv_symbol.clone() };
         if !tv_sym.is_empty() {
-            opts.push(ChartSrcOption { id: "tv".into(), label: format!("TradingView · {tv_sym}") });
+            opts.push(ChartSrcOption {
+                id: "tv".into(),
+                label: format!("TradingView · {tv_sym}"),
+                symbol: tv_sym,
+            });
         }
     }
     let body = serde_json::json!({ "primary": sh.meta.source, "options": opts });

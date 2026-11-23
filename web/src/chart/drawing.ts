@@ -16,6 +16,8 @@ export interface DrawingStyle {
   color: string;
   width: number;
   dash?: number[];
+  /** Perpanjang garis trendline: none = segmen saja; left/right/both = ray ke arah tsb. */
+  extend?: 'none' | 'left' | 'right' | 'both';
 }
 
 export interface Drawing {
@@ -170,6 +172,7 @@ export function createDrawing(
       color: style?.color ?? defaultColors[type] ?? '#2962FF',
       width: style?.width ?? (type === 'trendline' ? 2 : 1.5),
       ...(style?.dash ? { dash: style.dash } : type === 'hline' || type === 'vline' ? { dash: [4, 4] } : {}),
+      extend: style?.extend ?? 'none',
     },
     visible: true,
     locked: false,
@@ -527,9 +530,25 @@ export class DrawingRenderer {
       ctx.setLineDash([]);
     }
 
+    // Titik akhir garis — extend (ray) dipakai hanya utk trendline; clip area chart
+    // otomatis memotong garis di tepi canvas.
+    const extend = drawing.style.extend ?? 'none';
+    let ax1 = x1, ay1 = y1, ax2 = x2, ay2 = y2;
+    if (extend !== 'none' && x2 !== x1) {
+      const tFar = 100000 / Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1), 1);
+      if (extend === 'left' || extend === 'both') {
+        ax1 = x1 - (x2 - x1) * tFar;
+        ay1 = y1 - (y2 - y1) * tFar;
+      }
+      if (extend === 'right' || extend === 'both') {
+        ax2 = x2 + (x2 - x1) * tFar;
+        ay2 = y2 + (y2 - y1) * tFar;
+      }
+    }
+
     ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
+    ctx.moveTo(ax1, ay1);
+    ctx.lineTo(ax2, ay2);
     ctx.stroke();
     ctx.restore();
 
@@ -571,7 +590,7 @@ export class DrawingRenderer {
     // Price badge on the right
     ctx.save();
     const label = price.toFixed(2);
-    ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.font = `bold ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
     const textW = ctx.measureText(label).width;
     const badgeW = textW + 10 * dpr;
     const badgeH = 18 * dpr;
@@ -625,7 +644,7 @@ export class DrawingRenderer {
     // Date badge at the bottom
     ctx.save();
     const label = fmtDateShort(time);
-    ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.font = `bold ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
     const textW = ctx.measureText(label).width;
     const badgeW = textW + 10 * dpr;
     const badgeH = 18 * dpr;
@@ -704,7 +723,7 @@ export class DrawingRenderer {
 
     // Draw horizontal lines and level text labels
     ctx.save();
-    ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.font = `bold ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
     ctx.textBaseline = 'bottom';
 
     for (const lvl of levelsCalculated) {
@@ -795,7 +814,7 @@ export class DrawingRenderer {
       ctx.stroke();
 
       const label = store.previewPoint.price.toFixed(2);
-      ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+      ctx.font = `bold ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
       const textW = ctx.measureText(label).width;
       const badgeW = textW + 10 * dpr;
       const badgeH = 18 * dpr;
@@ -827,7 +846,7 @@ export class DrawingRenderer {
       ctx.stroke();
 
       const label = fmtDateShort(store.previewPoint.time);
-      ctx.font = `bold ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+      ctx.font = `bold ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
       const textW = ctx.measureText(label).width;
       const badgeW = textW + 10 * dpr;
       const badgeH = 18 * dpr;

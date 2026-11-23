@@ -1,6 +1,7 @@
 // TpoRenderer — TPO profile blocks, POC/VAH/VAL level lines, session separators, nPOC extensions
 import type { Viewport } from './viewport.js';
 import type { BarBuffer } from './data.js';
+import { settings } from './settings.js';
 
 export interface TpoRow {
   price: number;
@@ -66,9 +67,22 @@ export class TpoRenderer {
     return this.activeTag ?? 'OFF';
   }
 
+  /** Set profil langsung dari panel Indikator (null = OFF). */
+  setProfile(tag: string | null): void {
+    this.activeTag = ['S', 'D', 'M', 'W'].includes(tag ?? '') ? (tag as string) : null;
+  }
+
   toggleNPOC(): boolean {
     this.showNPOC = !this.showNPOC;
     return this.showNPOC;
+  }
+
+  setNPOC(on: boolean): void {
+    this.showNPOC = on;
+  }
+
+  setLetters(on: boolean): void {
+    this.showLetters = on;
   }
 
   /**
@@ -128,7 +142,8 @@ export class TpoRenderer {
   draw(ctx: CanvasRenderingContext2D, vp: Viewport, bars: BarBuffer): void {
     if (!this.data || !this.activeTag) return;
 
-    const profile = this.data.profiles[this.activeTag];
+    // Data TPO bisa kosong (server belum siap / sumber tanpa TPO) — jangan crash.
+    const profile = this.data.profiles?.[this.activeTag];
     if (!profile || !profile.periods || profile.periods.length === 0) return;
 
     const chartW = vp.w;
@@ -169,7 +184,7 @@ export class TpoRenderer {
 
       // Session Name Header
       ctx.setLineDash([]);
-      ctx.font = `600 ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+      ctx.font = `600 ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
       ctx.fillStyle = '#9598A1';
       ctx.textAlign = 'left';
       ctx.fillText(`╎ ${period.name}`, xStart + 4 * dpr, 18 * dpr);
@@ -183,7 +198,8 @@ export class TpoRenderer {
         }
 
         const periodWidth = Math.abs(xEnd - xStart);
-        const maxHistWidth = Math.min(periodWidth * 0.70, 280 * dpr);
+        // Lebar histogram TPO bisa diatur dari Panel Indikator → parameter TPO.
+        const maxHistWidth = Math.min(periodWidth * settings.data.tpoWidth, 280 * dpr);
 
         for (const row of period.rows) {
           if (row.price < vp.yMin || row.price > vp.yMax) continue;
@@ -206,7 +222,7 @@ export class TpoRenderer {
 
           // Draw letters if zoomed in enough vertically
           if (this.showLetters && rowHeight >= 11 * dpr && barWidth > 15 * dpr) {
-            ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+            ctx.font = `${Math.round(9 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
             ctx.fillStyle = row.is_poc ? '#FF8A80' : row.in_va ? '#90CAF9' : '#B0BEC5';
             ctx.textAlign = 'left';
             ctx.fillText(row.letters, xStart + 3 * dpr, yCenter + 3 * dpr, barWidth - 4 * dpr);
@@ -312,7 +328,7 @@ export class TpoRenderer {
 
     // Naked POC Tag near right edge
     const tag = `nPOC ${period.name}: ${period.poc.toFixed(2)}`;
-    ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
     const tw = ctx.measureText(tag).width;
     const pad = 6 * dpr;
     const badgeH = 16 * dpr;
@@ -344,7 +360,7 @@ export class TpoRenderer {
     dpr: number,
   ): void {
     const text = `${label} ${price.toFixed(2)}`;
-    ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+    ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
     const tw = ctx.measureText(text).width;
     const pad = 5 * dpr;
     const badgeH = 15 * dpr;

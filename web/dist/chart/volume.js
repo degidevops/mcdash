@@ -1,4 +1,4 @@
-import { BULL_V, BEAR_V } from './util.js';
+import { settings, hexToRgb01 } from './settings.js';
 const FLOATS_PER_VERT = 6;
 const VERTS_PER_BAR = 6; // 2 triangles = 1 quad
 export class VolumeRenderer {
@@ -29,14 +29,17 @@ export class VolumeRenderer {
         const volWorldH = priceRange * vp.volFrac / (1 - vp.volFrac);
         const volBase = vp.yMin - volWorldH; // bottom of volume in world coords
         const bw = vp.barW;
-        const halfBar = bw * 0.38;
+        const halfBar = bw * settings.data.bodyWidth;
         const hbX = halfBar / vp.w * (vp.xMax - vp.xMin);
+        const bullCol = hexToRgb01(settings.data.volumeUp, settings.data.volumeAlpha);
+        const bearCol = hexToRgb01(settings.data.volumeDown, settings.data.volumeAlpha);
         let off = 0;
         for (let i = iMin; i <= iMax; i++) {
             const v = bars.v[i];
             const bull = bars.c[i] >= bars.o[i];
-            const col = bull ? BULL_V : BEAR_V;
-            const cx = i + 0.5;
+            const col = bull ? bullCol : bearCol;
+            // Pusat bar volume = indeks bar i — sejajar persis dengan pusat candle.
+            const cx = i;
             const top = volBase + (v / maxVol) * volWorldH;
             off = quad(this.verts, off, cx - hbX, volBase, cx + hbX, top, col);
         }

@@ -11,7 +11,7 @@ import { TpoRenderer } from './tpo.js';
 import { DrawingStore, DrawingRenderer, createDrawing, screenXToTime, timeToScreenX, } from './drawing.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
-import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf, formatVol } from './util.js';
+import { settings } from './settings.js';
 export class ChartApp {
     glCanvas;
     ovCanvas;
@@ -23,11 +23,60 @@ export class ChartApp {
     infoEl;
     statusEl;
     dotEl;
-    pxEl;
-    chgEl;
     btnFollowEl;
-    btnTpoEl;
-    btnNPocEl;
+    tfSelEl = null;
+    // Panel Indikator (gaya DeepChart: daftar indikator + panel PARAMETER per indikator via gear)
+    btnIndEl = null;
+    indPanelEl = null;
+    indTpoEl = null;
+    indNpocEl = null;
+    indLettersEl = null;
+    indVolEl = null;
+    indNoteEl = null;
+    indTpoWrapEl = null;
+    indNpocWrapEl = null;
+    indLettersWrapEl = null;
+    indTpoGearEl = null;
+    indTpoParamsEl = null;
+    indVolGearEl = null;
+    indVolParamsEl = null;
+    segTpoProfileEl = null;
+    rgTpoWEl = null;
+    rgTpoWvEl = null;
+    rgVolHEl = null;
+    rgVolHvEl = null;
+    rgVolAEl = null;
+    rgVolAvEl = null;
+    swVolUpEl = null;
+    swVolDownEl = null;
+    indVolume = true; // indikator Volume (panel bawah) aktif
+    tpoLastProfile = 'S'; // profil TPO terakhir dipilih (utk re-enable cepat)
+    // Panel jumlah bar (pill klik → panel pengaturan Data & History, bukan dropdown polos)
+    cntBtnEl = null;
+    cntBtnLabelEl = null;
+    cntPanelEl = null;
+    segCntEl = null;
+    cfgAutoHistEl = null;
+    // Panel Pengaturan Chart & Candle (gear di toolbar)
+    btnChartSetEl = null;
+    chartPanelEl = null;
+    swCandleUpEl = null;
+    swCandleDownEl = null;
+    segBodyEl = null;
+    cfgGridEl = null;
+    cfgCountdownEl = null;
+    cfgResetEl = null;
+    // Panel pengaturan OBJEK drawing (muncul saat sebuah gambar dipilih)
+    objPanelEl = null;
+    objTitleEl = null;
+    objColorsEl = null;
+    objWidthEl = null;
+    objDashEl = null;
+    objExtendBlockEl = null;
+    objExtendEl = null;
+    objLockEl = null;
+    objDeleteEl = null;
+    SWATCH_COLORS = ['#26A69A', '#EF5350', '#2962FF', '#FFD700', '#00BCD4', '#AB47BC', '#FFFFFF'];
     btnExportEl;
     btnShortcutsEl;
     shortcutsModalEl;
@@ -38,15 +87,12 @@ export class ChartApp {
     btnDeleteSelectedEl = null;
     btnDrawColorEl = null;
     dtColorDotEl = null;
-    // Bottom Status Bar elements (Informasi Tanggal & Waktu di Bawah)
-    sbTimeEl = null;
-    sbOEl = null;
-    sbHEl = null;
-    sbLEl = null;
-    sbCEl = null;
-    sbChgEl = null;
-    sbVolEl = null;
-    sbTfEl = null;
+    // Bottom toolbar (gaya DeepChart): toggle TPO/nPOC/Huruf/Volume + switch Live
+    btHintEl = null;
+    btNpocEl = null;
+    btLettersEl = null;
+    btVolEl = null;
+    btLiveEl = null;
     glCtx = null;
     hasWebGL = true;
     DRAW_COLORS = ['#2962FF', '#EF5350', '#FFD700', '#00BCD4', '#26A69A', '#AB47BC', '#FFFFFF'];
@@ -76,8 +122,7 @@ export class ChartApp {
     source = 'main'; // sumber data aktif (main = sesuai config server)
     srcInfo = null;
     refetchSeq = 0; // pembatal refetch yang sedang berjalan bila ada permintaan lebih baru
-    barCount = 500; // jumlah bar yang diminta per fetch (dropdown "bar" di header)
-    cntSelEl = null;
+    barCount = 500; // jumlah bar yang diminta per fetch (panel "Data & History" di header)
     bufReady = false; // buffer berisi data (source, tf) aktif — false selama penggantian berjalan
     loadingOlder = false; // lazy-load history lebih lama sedang berjalan
     noMoreHistory = false; // server tidak punya history lebih lama lagi utk (source, tf) aktif
@@ -97,11 +142,53 @@ export class ChartApp {
         this.infoEl = document.getElementById('info');
         this.statusEl = document.getElementById('status');
         this.dotEl = document.getElementById('dot');
-        this.pxEl = document.getElementById('px');
-        this.chgEl = document.getElementById('chg');
         this.btnFollowEl = document.getElementById('btnFollow');
-        this.btnTpoEl = document.getElementById('btnTpo');
-        this.btnNPocEl = document.getElementById('btnNPoc');
+        this.tfSelEl = document.getElementById('tfSel');
+        this.btnIndEl = document.getElementById('btnInd');
+        this.indPanelEl = document.getElementById('indPanel');
+        this.indTpoEl = document.getElementById('indTpo');
+        this.indNpocEl = document.getElementById('indNpoc');
+        this.indLettersEl = document.getElementById('indLetters');
+        this.indVolEl = document.getElementById('indVol');
+        this.indNoteEl = document.getElementById('indNote');
+        this.indTpoWrapEl = document.getElementById('indTpoWrap');
+        this.indNpocWrapEl = document.getElementById('indNpocWrap');
+        this.indLettersWrapEl = document.getElementById('indLettersWrap');
+        this.indTpoGearEl = document.getElementById('indTpoGear');
+        this.indTpoParamsEl = document.getElementById('indTpoParams');
+        this.indVolGearEl = document.getElementById('indVolGear');
+        this.indVolParamsEl = document.getElementById('indVolParams');
+        this.segTpoProfileEl = document.getElementById('segTpoProfile');
+        this.rgTpoWEl = document.getElementById('rgTpoW');
+        this.rgTpoWvEl = document.getElementById('rgTpoWv');
+        this.rgVolHEl = document.getElementById('rgVolH');
+        this.rgVolHvEl = document.getElementById('rgVolHv');
+        this.rgVolAEl = document.getElementById('rgVolA');
+        this.rgVolAvEl = document.getElementById('rgVolAv');
+        this.swVolUpEl = document.getElementById('swVolUp');
+        this.swVolDownEl = document.getElementById('swVolDown');
+        this.cntBtnEl = document.getElementById('cntBtn');
+        this.cntBtnLabelEl = document.getElementById('cntBtnLabel');
+        this.cntPanelEl = document.getElementById('cntPanel');
+        this.segCntEl = document.getElementById('segCnt');
+        this.cfgAutoHistEl = document.getElementById('cfgAutoHist');
+        this.btnChartSetEl = document.getElementById('btnChartSet');
+        this.chartPanelEl = document.getElementById('chartPanel');
+        this.swCandleUpEl = document.getElementById('swCandleUp');
+        this.swCandleDownEl = document.getElementById('swCandleDown');
+        this.segBodyEl = document.getElementById('segBody');
+        this.cfgGridEl = document.getElementById('cfgGrid');
+        this.cfgCountdownEl = document.getElementById('cfgCountdown');
+        this.cfgResetEl = document.getElementById('cfgReset');
+        this.objPanelEl = document.getElementById('objPanel');
+        this.objTitleEl = document.getElementById('objTitle');
+        this.objColorsEl = document.getElementById('objColors');
+        this.objWidthEl = document.getElementById('objWidth');
+        this.objDashEl = document.getElementById('objDash');
+        this.objExtendBlockEl = document.getElementById('objExtendBlock');
+        this.objExtendEl = document.getElementById('objExtend');
+        this.objLockEl = document.getElementById('objLock');
+        this.objDeleteEl = document.getElementById('objDelete');
         this.btnExportEl = document.getElementById('btnExport');
         this.btnShortcutsEl = document.getElementById('btnShortcuts');
         this.shortcutsModalEl = document.getElementById('shortcutsModal');
@@ -112,17 +199,12 @@ export class ChartApp {
         this.btnDeleteSelectedEl = document.getElementById('btnDeleteSelected');
         this.btnDrawColorEl = document.getElementById('btnDrawColor');
         this.dtColorDotEl = document.getElementById('dtColorDot');
-        // Bottom Status Bar (Informasi Tanggal & Waktu di Bawah)
-        this.sbTimeEl = document.getElementById('sbTime');
-        this.sbOEl = document.getElementById('sbO');
-        this.sbHEl = document.getElementById('sbH');
-        this.sbLEl = document.getElementById('sbL');
-        this.sbCEl = document.getElementById('sbC');
-        this.sbChgEl = document.getElementById('sbChg');
-        this.sbVolEl = document.getElementById('sbVol');
-        this.sbTfEl = document.getElementById('sbTf');
-        if (this.sbTfEl)
-            this.sbTfEl.textContent = this.tfLabel(this.tf);
+        // Bottom toolbar (gaya DeepChart: radio TPO + nPOC/Huruf/Volume + switch Live)
+        this.btHintEl = document.getElementById('btHint');
+        this.btNpocEl = document.getElementById('btNpoc');
+        this.btLettersEl = document.getElementById('btLetters');
+        this.btVolEl = document.getElementById('btVol');
+        this.btLiveEl = document.getElementById('btLive');
         // Drawing storage & interaction
         this.drawingStore.loadFromStorage(this.symbol);
         this.bindDrawingUI();
@@ -147,29 +229,63 @@ export class ChartApp {
                 this.switchSource(this.srcSelEl.value);
             });
         }
-        // Dropdown jumlah bar per fetch (500 / 2.000 / 20.000 / 100.000). History lebih lama dari itu
-        // diambil OTOMATIS saat chart di-pan ke kiri mendekati tepi data (lazy-load, lihat loadOlder).
-        this.cntSelEl = document.getElementById('cntSel');
-        if (this.cntSelEl) {
-            try {
-                const saved = parseInt(localStorage.getItem('mcdash.chart.count') || '', 10);
-                if ([500, 2000, 20000, 100000].includes(saved))
-                    this.barCount = saved;
-            }
-            catch { /* ignore */ }
-            this.cntSelEl.value = String(this.barCount);
-            this.cntSelEl.addEventListener('change', () => {
-                const v = parseInt(this.cntSelEl.value, 10);
-                if ([500, 2000, 20000, 100000].includes(v)) {
-                    this.barCount = v;
-                    try {
-                        localStorage.setItem('mcdash.chart.count', String(v));
-                    }
-                    catch { /* ignore */ }
-                    this.refetchBars();
-                }
+        // Panel pengaturan jumlah bar (gaya DeepChart: klik pill → panel settingan,
+        // bukan dropdown polos). History lebih lama diambil otomatis saat pan kiri (lazy-load)
+        // bila opsi "History otomatis" aktif di panel ini.
+        try {
+            const saved = parseInt(localStorage.getItem('mcdash.chart.count') || '', 10);
+            if ([500, 2000, 20000].includes(saved))
+                this.barCount = saved;
+        }
+        catch { /* ignore */ }
+        this.updateCntUI();
+        if (this.cntBtnEl) {
+            this.cntBtnEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.togglePanel(this.cntPanelEl, this.cntBtnEl);
             });
         }
+        this.bindSegmented(this.segCntEl, () => String(this.barCount), (v) => {
+            const n = parseInt(v, 10);
+            if ([500, 2000, 20000].includes(n)) {
+                this.barCount = n;
+                try {
+                    localStorage.setItem('mcdash.chart.count', String(n));
+                }
+                catch { /* ignore */ }
+                this.updateCntUI();
+                this.refetchBars();
+            }
+        });
+        if (this.cfgAutoHistEl) {
+            this.cfgAutoHistEl.checked = settings.data.autoHistory;
+            this.cfgAutoHistEl.addEventListener('change', () => {
+                settings.data.autoHistory = this.cfgAutoHistEl.checked;
+                settings.save();
+            });
+        }
+        // Volume ON/OFF dipertahankan antar sesi; OFF → panel volume hilang total
+        // (volFrac 0: candle memakai tinggi chart penuh, tanpa garis separator).
+        try {
+            this.indVolume = localStorage.getItem('mcdash.chart.vol') !== '0';
+        }
+        catch { /* ignore */ }
+        this.applyVolumeFrac();
+        // Klik di luar panel → tutup semua popover pengaturan (kecuali objPanel yang
+        // mengikuti seleksi objek drawing).
+        document.addEventListener('mousedown', (e) => {
+            const t = e.target;
+            const pairs = [
+                [this.cntPanelEl, this.cntBtnEl],
+                [this.chartPanelEl, this.btnChartSetEl],
+                [this.indPanelEl, this.btnIndEl],
+            ];
+            for (const [p, b] of pairs) {
+                if (p?.classList.contains('open') && !p.contains(t) && !(b?.contains(t))) {
+                    p.classList.remove('open');
+                }
+            }
+        });
         // Client
         this.client = new ChartClient((bars) => { this.bars.load(bars); this.fitAndRender(); }, (price) => {
             if (this.source !== 'main')
@@ -218,22 +334,12 @@ export class ChartApp {
         if (this.btnFollowEl) {
             this.btnFollowEl.addEventListener('click', () => this.resetToLive());
         }
-        // TPO and nPOC buttons
-        if (this.btnTpoEl) {
-            this.btnTpoEl.addEventListener('click', () => {
-                const mode = this.tpo.toggleProfile();
-                this.btnTpoEl.textContent = `📊 TPO: ${mode}`;
-                this.btnTpoEl.classList.toggle('on', mode !== 'OFF');
-                this.markDirty();
-            });
-        }
-        if (this.btnNPocEl) {
-            this.btnNPocEl.addEventListener('click', () => {
-                const on = this.tpo.toggleNPOC();
-                this.btnNPocEl.classList.toggle('on', on);
-                this.markDirty();
-            });
-        }
+        // Panel Indikator (TPO + parameter, Volume + parameter), Panel Pengaturan Chart,
+        // dan panel pengaturan objek drawing — gaya DeepChart: tiap fitur punya panel settingan.
+        this.bindIndicatorPanel();
+        this.bindChartSettingsPanel();
+        this.bindObjectPanel();
+        this.syncIndicatorPanel();
         // Export screenshot
         if (this.btnExportEl) {
             this.btnExportEl.addEventListener('click', () => this.exportPNG());
@@ -254,14 +360,16 @@ export class ChartApp {
                 }
             });
         }
-        // TF buttons
-        document.getElementById('tf').addEventListener('click', (e) => {
-            const btn = e.target.closest('button');
-            if (!btn)
-                return;
-            const tf = parseInt(btn.dataset['tf'] || '60');
-            this.switchTf(tf);
-        });
+        // TF pill dropdown (gaya DeepChart) + bottom toolbar
+        if (this.tfSelEl) {
+            this.tfSelEl.value = String(this.tf);
+            this.tfSelEl.addEventListener('change', () => {
+                const v = parseInt(this.tfSelEl.value, 10);
+                if ([1, 5, 15, 60, 240, 1440].includes(v))
+                    this.switchTf(v);
+            });
+        }
+        this.bindBottomToolbar();
         // Keyboard shortcuts
         this.bindKeyboard();
         // Start render loop immediately
@@ -303,6 +411,7 @@ export class ChartApp {
                 saved = localStorage.getItem('mcdash.chart.src');
             }
             catch { /* ignore */ }
+            this.updateSymbolForSource('main');
             if (saved && saved !== 'main' && info.options.some(o => o.id === saved)) {
                 sel.value = saved;
                 this.switchSource(saved);
@@ -314,13 +423,438 @@ export class ChartApp {
         const opt = this.srcInfo?.options.find(o => o.id === src);
         return opt?.label ?? (src === 'binance' ? 'Binance' : src === 'tv' ? 'TradingView' : 'Sumber utama');
     }
-    updateSourceUI() {
+    /** Simbol aktual sumber aktif (mis. OANDA:XAUUSD / XAUUSDT) — dipakai judul kiri atas,
+     *  watermark, export PNG, dan kunci penyimpanan drawing. */
+    updateSymbolForSource(src) {
+        const opt = this.srcInfo?.options.find(o => o.id === src);
+        if (opt?.symbol)
+            this.setSymbol(opt.symbol);
+    }
+    /** Ganti simbol tampilan; migrasi drawing lama (era simbol statis XAUUSDT) sekali saja.
+     *  Simbol tampil di data window kiri-atas (via drawInfo) & pill sumber di header. */
+    setSymbol(sym) {
+        if (!sym)
+            return;
+        this.symbol = sym;
+        try {
+            const key = `mcdash_chart_drawings_${sym.toUpperCase()}`;
+            if (!localStorage.getItem(key)) {
+                const legacy = localStorage.getItem('mcdash_chart_drawings_XAUUSDT');
+                if (legacy)
+                    localStorage.setItem(key, legacy);
+            }
+        }
+        catch { /* ignore */ }
+        this.drawingStore.loadFromStorage(sym);
+        this.updateDrawingSelectionUI();
+        this.markDirty();
+    }
+    /** Buka/tutup popover panel pengaturan — diposisikan di bawah tombol pemantiknya,
+     *  dan menutup popover lain agar hanya satu yang terbuka (kecuali objPanel yang
+     *  mengikuti seleksi objek drawing). */
+    togglePanel(panel, anchorBtn, open) {
+        if (!panel)
+            return;
+        const willOpen = open ?? !panel.classList.contains('open');
+        if (willOpen) {
+            for (const p of [this.cntPanelEl, this.chartPanelEl, this.indPanelEl]) {
+                if (p && p !== panel)
+                    p.classList.remove('open');
+            }
+            if (anchorBtn) {
+                const r = anchorBtn.getBoundingClientRect();
+                panel.style.top = `${r.bottom + 6}px`;
+                const width = 268;
+                const rightSpace = Math.max(8, window.innerWidth - r.right);
+                panel.style.right = `${Math.min(rightSpace, Math.max(8, window.innerWidth - width - 8))}px`;
+                panel.style.left = 'auto';
+            }
+        }
+        panel.classList.toggle('open', willOpen);
+    }
+    toggleIndicatorPanel(open) {
+        if (open ?? true)
+            this.syncIndicatorPanel();
+        this.togglePanel(this.indPanelEl, this.btnIndEl, open);
+    }
+    toggleChartPanel(open) {
+        this.togglePanel(this.chartPanelEl, this.btnChartSetEl, open);
+    }
+    closeAllPopovers() {
+        for (const p of [this.cntPanelEl, this.chartPanelEl, this.indPanelEl])
+            p?.classList.remove('open');
+    }
+    anyPopoverOpen() {
+        return !!(this.cntPanelEl?.classList.contains('open')
+            || this.chartPanelEl?.classList.contains('open')
+            || this.indPanelEl?.classList.contains('open'));
+    }
+    /** Bind kontrol segmented (.cfg-seg): klik tombol → setVal + tanda aktif 'on'. */
+    bindSegmented(seg, getVal, setVal) {
+        if (!seg)
+            return;
+        seg.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn || !seg.contains(btn))
+                return;
+            setVal(btn.dataset['val'] ?? '');
+            this.syncSegmented(seg, getVal());
+        });
+        this.syncSegmented(seg, getVal());
+    }
+    syncSegmented(seg, val) {
+        if (!seg)
+            return;
+        seg.querySelectorAll('button').forEach(btn => {
+            btn.classList.toggle('on', btn.dataset['val'] === val);
+        });
+    }
+    /** Bangun deretan swatch warna (.cfg-sw) dari daftar warna standar. */
+    buildSwatches(container, getVal, setVal) {
+        if (!container)
+            return;
+        container.innerHTML = '';
+        for (const c of this.SWATCH_COLORS) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'sw';
+            b.style.background = c;
+            b.title = c;
+            b.addEventListener('click', () => {
+                setVal(c);
+                this.syncSwatches(container, getVal());
+            });
+            container.appendChild(b);
+        }
+        this.syncSwatches(container, getVal());
+    }
+    syncSwatches(container, val) {
+        if (!container)
+            return;
+        container.querySelectorAll('.sw').forEach(btn => {
+            btn.classList.toggle('on', btn.title.toLowerCase() === val.toLowerCase());
+        });
+    }
+    /** Label pill jumlah bar di header + segmented di panel Data & History. */
+    updateCntUI() {
+        if (this.cntBtnLabelEl) {
+            this.cntBtnLabelEl.textContent = `${this.barCount.toLocaleString('id-ID')} bar`;
+        }
+        this.syncSegmented(this.segCntEl, String(this.barCount));
+    }
+    /** Volume ON/OFF — OFF berarti panel volume hilang TOTAL dari chart. */
+    setVolume(on) {
+        this.indVolume = on;
+        try {
+            localStorage.setItem('mcdash.chart.vol', on ? '1' : '0');
+        }
+        catch { /* ignore */ }
+        this.applyVolumeFrac();
+        this.syncIndicatorPanel();
+        this.markDirty();
+    }
+    /** volFrac viewport: 0 saat volume OFF (chart penuh), sebaliknya tinggi dari settings. */
+    applyVolumeFrac() {
+        this.vp.volFrac = this.indVolume ? settings.data.volumeHeight : 0;
+    }
+    bindIndicatorPanel() {
+        if (this.btnIndEl) {
+            this.btnIndEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.syncIndicatorPanel();
+                this.togglePanel(this.indPanelEl, this.btnIndEl);
+            });
+        }
+        // Gear: buka/tutup bagian parameter per indikator (gaya panel settings DeepChart)
+        if (this.indTpoGearEl) {
+            this.indTpoGearEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.indTpoParamsEl?.classList.toggle('open');
+                this.indTpoGearEl.classList.toggle('on');
+            });
+        }
+        if (this.indVolGearEl) {
+            this.indVolGearEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.indVolParamsEl?.classList.toggle('open');
+                this.indVolGearEl.classList.toggle('on');
+            });
+        }
+        if (this.indTpoEl) {
+            this.indTpoEl.addEventListener('change', () => {
+                if (this.source !== 'main') {
+                    this.syncIndicatorPanel();
+                    return;
+                }
+                this.tpo.setProfile(this.indTpoEl.checked ? this.tpoLastProfile : null);
+                this.syncIndicatorPanel();
+                this.markDirty();
+            });
+        }
+        // Profil TPO via segmented S/D/W/M
+        this.bindSegmented(this.segTpoProfileEl, () => (this.tpo.activeTag ?? this.tpoLastProfile ?? 'S'), (v) => {
+            if (this.source !== 'main')
+                return;
+            this.tpoLastProfile = v;
+            this.tpo.setProfile(v);
+            this.syncIndicatorPanel();
+            this.markDirty();
+        });
+        if (this.indNpocEl) {
+            this.indNpocEl.addEventListener('change', () => {
+                if (this.source !== 'main') {
+                    this.syncIndicatorPanel();
+                    return;
+                }
+                this.tpo.setNPOC(this.indNpocEl.checked);
+                this.markDirty();
+            });
+        }
+        if (this.indLettersEl) {
+            this.indLettersEl.addEventListener('change', () => {
+                if (this.source !== 'main') {
+                    this.syncIndicatorPanel();
+                    return;
+                }
+                this.tpo.setLetters(this.indLettersEl.checked);
+                this.markDirty();
+            });
+        }
+        if (this.indVolEl) {
+            this.indVolEl.addEventListener('change', () => {
+                this.setVolume(this.indVolEl.checked);
+            });
+        }
+        // Parameter TPO: lebar histogram
+        if (this.rgTpoWEl) {
+            this.rgTpoWEl.addEventListener('input', () => {
+                settings.data.tpoWidth = parseInt(this.rgTpoWEl.value, 10) / 100;
+                if (this.rgTpoWvEl)
+                    this.rgTpoWvEl.textContent = `${this.rgTpoWEl.value}%`;
+                settings.save();
+                this.markDirty();
+            });
+        }
+        // Parameter Volume: tinggi panel, opasitas, warna
+        if (this.rgVolHEl) {
+            this.rgVolHEl.addEventListener('input', () => {
+                settings.data.volumeHeight = parseInt(this.rgVolHEl.value, 10) / 100;
+                if (this.rgVolHvEl)
+                    this.rgVolHvEl.textContent = `${this.rgVolHEl.value}%`;
+                settings.save();
+                this.applyVolumeFrac();
+                this.markDirty();
+            });
+        }
+        if (this.rgVolAEl) {
+            this.rgVolAEl.addEventListener('input', () => {
+                settings.data.volumeAlpha = parseInt(this.rgVolAEl.value, 10) / 100;
+                if (this.rgVolAvEl)
+                    this.rgVolAvEl.textContent = `${this.rgVolAEl.value}%`;
+                settings.save();
+                this.markDirty();
+            });
+        }
+        this.buildSwatches(this.swVolUpEl, () => settings.data.volumeUp, (c) => {
+            settings.data.volumeUp = c;
+            settings.save();
+            this.markDirty();
+        });
+        this.buildSwatches(this.swVolDownEl, () => settings.data.volumeDown, (c) => {
+            settings.data.volumeDown = c;
+            settings.save();
+            this.markDirty();
+        });
+    }
+    /** Panel Pengaturan Chart & Candle (gear di toolbar — Shortcut S). */
+    bindChartSettingsPanel() {
+        if (this.btnChartSetEl) {
+            this.btnChartSetEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.togglePanel(this.chartPanelEl, this.btnChartSetEl);
+            });
+        }
+        this.buildSwatches(this.swCandleUpEl, () => settings.data.candleUp, (c) => {
+            settings.data.candleUp = c;
+            settings.save();
+            this.markDirty();
+        });
+        this.buildSwatches(this.swCandleDownEl, () => settings.data.candleDown, (c) => {
+            settings.data.candleDown = c;
+            settings.save();
+            this.markDirty();
+        });
+        this.bindSegmented(this.segBodyEl, () => String(settings.data.bodyWidth), (v) => {
+            const n = parseFloat(v);
+            if (!isNaN(n)) {
+                settings.data.bodyWidth = n;
+                settings.save();
+                this.markDirty();
+            }
+        });
+        if (this.cfgGridEl) {
+            this.cfgGridEl.checked = settings.data.showGrid;
+            this.cfgGridEl.addEventListener('change', () => {
+                settings.data.showGrid = this.cfgGridEl.checked;
+                settings.save();
+                this.markDirty();
+            });
+        }
+        if (this.cfgCountdownEl) {
+            this.cfgCountdownEl.checked = settings.data.showCountdown;
+            this.cfgCountdownEl.addEventListener('change', () => {
+                settings.data.showCountdown = this.cfgCountdownEl.checked;
+                settings.save();
+                this.markDirty();
+            });
+        }
+        if (this.cfgResetEl) {
+            this.cfgResetEl.addEventListener('click', () => {
+                settings.reset();
+                this.applyVolumeFrac();
+                this.syncSettingsUI();
+                this.markDirty();
+            });
+        }
+    }
+    /** Sinkronkan semua kontrol yang dibawa settings (chart, volume, TPO, auto-history). */
+    syncSettingsUI() {
+        this.syncSwatches(this.swCandleUpEl, settings.data.candleUp);
+        this.syncSwatches(this.swCandleDownEl, settings.data.candleDown);
+        this.syncSegmented(this.segBodyEl, String(settings.data.bodyWidth));
+        if (this.cfgGridEl)
+            this.cfgGridEl.checked = settings.data.showGrid;
+        if (this.cfgCountdownEl)
+            this.cfgCountdownEl.checked = settings.data.showCountdown;
+        if (this.cfgAutoHistEl)
+            this.cfgAutoHistEl.checked = settings.data.autoHistory;
+        if (this.rgTpoWEl) {
+            this.rgTpoWEl.value = String(Math.round(settings.data.tpoWidth * 100));
+            if (this.rgTpoWvEl)
+                this.rgTpoWvEl.textContent = `${Math.round(settings.data.tpoWidth * 100)}%`;
+        }
+        if (this.rgVolHEl) {
+            this.rgVolHEl.value = String(Math.round(settings.data.volumeHeight * 100));
+            if (this.rgVolHvEl)
+                this.rgVolHvEl.textContent = `${Math.round(settings.data.volumeHeight * 100)}%`;
+        }
+        if (this.rgVolAEl) {
+            this.rgVolAEl.value = String(Math.round(settings.data.volumeAlpha * 100));
+            if (this.rgVolAvEl)
+                this.rgVolAvEl.textContent = `${Math.round(settings.data.volumeAlpha * 100)}%`;
+        }
+        this.syncSwatches(this.swVolUpEl, settings.data.volumeUp);
+        this.syncSwatches(this.swVolDownEl, settings.data.volumeDown);
+    }
+    /** Sinkronkan isi panel Indikator dengan state renderer (TPO/nPOC/huruf/volume). */
+    syncIndicatorPanel() {
+        const tpoOn = this.tpo.activeTag !== null;
+        if (tpoOn)
+            this.tpoLastProfile = this.tpo.activeTag;
+        if (this.indTpoEl)
+            this.indTpoEl.checked = tpoOn;
+        this.syncSegmented(this.segTpoProfileEl, this.tpo.activeTag ?? this.tpoLastProfile);
+        if (this.indNpocEl)
+            this.indNpocEl.checked = this.tpo.showNPOC;
+        if (this.indLettersEl)
+            this.indLettersEl.checked = this.tpo.showLetters;
+        if (this.indVolEl)
+            this.indVolEl.checked = this.indVolume;
         const ext = this.source !== 'main';
-        // TPO/nPOC dihitung dari sumber utama — tidak berlaku untuk sumber alternatif
-        if (this.btnTpoEl)
-            this.btnTpoEl.disabled = ext;
-        if (this.btnNPocEl)
-            this.btnNPocEl.disabled = ext;
+        for (const el of [this.indTpoWrapEl, this.indNpocWrapEl, this.indLettersWrapEl]) {
+            el?.classList.toggle('off', ext);
+        }
+        if (this.indTpoEl)
+            this.indTpoEl.disabled = ext;
+        if (this.indTpoGearEl)
+            this.indTpoGearEl.disabled = ext;
+        if (this.indNpocEl)
+            this.indNpocEl.disabled = ext;
+        if (this.indLettersEl)
+            this.indLettersEl.disabled = ext;
+        this.segTpoProfileEl?.querySelectorAll('button').forEach(b => {
+            b.disabled = ext;
+        });
+        if (this.rgTpoWEl)
+            this.rgTpoWEl.disabled = ext;
+        if (this.indNoteEl) {
+            this.indNoteEl.textContent = ext
+                ? 'TPO hanya dihitung untuk sumber utama.'
+                : 'TPO & nPOC dihitung dari sumber utama.';
+        }
+        this.syncSettingsUI();
+        this.syncBottomToolbar();
+    }
+    /** Binding bottom toolbar (gaya DeepChart): radio profil TPO + nPOC/Huruf/Volume + switch Live. */
+    bindBottomToolbar() {
+        document.querySelectorAll('.btg[data-btpo]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (this.source !== 'main')
+                    return; // TPO hanya utk sumber utama
+                const tag = btn.dataset['btpo'];
+                this.tpo.setProfile(this.tpo.activeTag === tag ? null : tag); // klik aktif = OFF
+                this.syncIndicatorPanel();
+                this.markDirty();
+            });
+        });
+        if (this.btNpocEl) {
+            this.btNpocEl.addEventListener('click', () => {
+                if (this.source !== 'main')
+                    return;
+                this.tpo.setNPOC(!this.tpo.showNPOC);
+                this.syncIndicatorPanel();
+                this.markDirty();
+            });
+        }
+        if (this.btLettersEl) {
+            this.btLettersEl.addEventListener('click', () => {
+                if (this.source !== 'main')
+                    return;
+                this.tpo.setLetters(!this.tpo.showLetters);
+                this.syncIndicatorPanel();
+                this.markDirty();
+            });
+        }
+        if (this.btVolEl) {
+            this.btVolEl.addEventListener('click', () => {
+                this.setVolume(!this.indVolume);
+            });
+        }
+        if (this.btLiveEl) {
+            this.btLiveEl.addEventListener('change', () => {
+                if (this.btLiveEl.checked) {
+                    this.resetToLive();
+                }
+                else {
+                    this.panzoom.setAutoFollow(false);
+                    this.updateAutoFollowBtn(false);
+                }
+            });
+        }
+    }
+    /** Sinkronkan tombol bottom toolbar dengan state renderer (dipanggil bersama panel Indikator). */
+    syncBottomToolbar() {
+        const ext = this.source !== 'main';
+        document.querySelectorAll('.btg[data-btpo]').forEach(btn => {
+            btn.classList.toggle('on', this.tpo.activeTag === (btn.dataset['btpo'] ?? ''));
+            btn.disabled = ext;
+        });
+        if (this.btNpocEl) {
+            this.btNpocEl.classList.toggle('on', this.tpo.showNPOC);
+            this.btNpocEl.disabled = ext;
+        }
+        if (this.btLettersEl) {
+            this.btLettersEl.classList.toggle('on', this.tpo.showLetters);
+            this.btLettersEl.disabled = ext;
+        }
+        if (this.btVolEl)
+            this.btVolEl.classList.toggle('on', this.indVolume);
+        if (this.btLiveEl && this.panzoom)
+            this.btLiveEl.checked = this.panzoom.autoFollow;
+    }
+    updateSourceUI() {
+        // TPO dihitung dari sumber utama — panel indikator & bottom toolbar menonaktifkan setelannya
+        this.syncIndicatorPanel();
     }
     async switchSource(src) {
         if (src === this.source)
@@ -333,6 +867,7 @@ export class ChartApp {
             localStorage.setItem('mcdash.chart.src', src);
         }
         catch { /* ignore */ }
+        this.updateSymbolForSource(src);
         this.updateSourceUI();
         await this.refetchBars();
     }
@@ -379,7 +914,8 @@ export class ChartApp {
     /** Dipanggil tiap pan/zoom: muat history lebih lama saat tepi kiri panduan mendekati tepi data. */
     onViewportChanged() {
         this.markDirty();
-        if (this.vp.xMin < 10)
+        // History otomatis bisa dimatikan dari panel "Data & History".
+        if (settings.data.autoHistory && this.vp.xMin < 10)
             this.loadOlder();
     }
     /** Lazy-load: ambil `barCount` bar lebih lama dari bar terlama yang sudah ada di buffer,
@@ -467,11 +1003,8 @@ export class ChartApp {
                 case 'P': {
                     if (this.source !== 'main')
                         break; // TPO hanya utk sumber utama
-                    const mode = this.tpo.toggleProfile();
-                    if (this.btnTpoEl) {
-                        this.btnTpoEl.textContent = `📊 TPO: ${mode}`;
-                        this.btnTpoEl.classList.toggle('on', mode !== 'OFF');
-                    }
+                    this.tpo.toggleProfile();
+                    this.syncIndicatorPanel();
                     this.markDirty();
                     break;
                 }
@@ -479,13 +1012,20 @@ export class ChartApp {
                 case 'N': {
                     if (this.source !== 'main')
                         break; // nPOC hanya utk sumber utama
-                    const on = this.tpo.toggleNPOC();
-                    if (this.btnNPocEl) {
-                        this.btnNPocEl.classList.toggle('on', on);
-                    }
+                    this.tpo.toggleNPOC();
+                    this.syncIndicatorPanel();
                     this.markDirty();
                     break;
                 }
+                case 'i':
+                case 'I':
+                    this.syncIndicatorPanel();
+                    this.togglePanel(this.indPanelEl, this.btnIndEl);
+                    break;
+                case 's':
+                case 'S':
+                    this.toggleChartPanel();
+                    break;
                 case 't':
                 case 'T':
                     this.setTool('trendline');
@@ -513,6 +1053,9 @@ export class ChartApp {
                 case 'Escape':
                     if (this.shortcutsModalEl?.classList.contains('open')) {
                         this.shortcutsModalEl.classList.remove('open');
+                    }
+                    else if (this.anyPopoverOpen()) {
+                        this.closeAllPopovers();
                     }
                     else if (this.drawingStore.activeTool || this.drawingStore.pendingPoints.length > 0) {
                         this.setTool(null);
@@ -1003,7 +1546,7 @@ export class ChartApp {
         // 4. X Axis
         ctx.drawImage(this.xCanvas, 0, this.ovCanvas.height);
         // 5. Watermark ATAS / MCDash
-        ctx.font = 'bold 12px ui-monospace,SFMono-Regular,monospace';
+        ctx.font = 'bold 12px "Inter","Segoe UI",Roboto,Arial,sans-serif';
         ctx.fillStyle = 'rgba(207, 216, 220, 0.75)';
         ctx.textAlign = 'right';
         const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1030,6 +1573,8 @@ export class ChartApp {
         if (this.btnFollowEl) {
             this.btnFollowEl.classList.toggle('hidden', follow);
         }
+        if (this.btLiveEl)
+            this.btLiveEl.checked = follow;
     }
     resize() {
         const main = document.getElementById('chartMain');
@@ -1068,27 +1613,14 @@ export class ChartApp {
         this.markDirty();
     }
     async switchTf(tf) {
-        // Update button states
-        document.querySelectorAll('#tf button').forEach(b => {
-            b.classList.toggle('on', parseInt(b.dataset['tf'] || '0') === tf);
-        });
         this.tf = tf;
         this.client.setTf(tf);
-        if (this.sbTfEl)
-            this.sbTfEl.textContent = this.tfLabel(tf);
+        if (this.tfSelEl)
+            this.tfSelEl.value = String(tf);
         await this.refetchBars();
     }
     updatePrice(price) {
-        const dec = decimalsOf(this.tickSize);
-        this.pxEl.textContent = fmtPrice(price, dec);
-        if (this.openPrice > 0) {
-            const diff = price - this.openPrice;
-            const pct = (diff / this.openPrice) * 100;
-            const bull = diff >= 0;
-            this.pxEl.className = 'px ' + (bull ? 'up' : 'dn');
-            this.chgEl.textContent = `${bull ? '▲ +' : '▼ '}${Math.abs(diff).toFixed(dec)} (${fmtPct(pct)})`;
-            this.chgEl.style.color = bull ? 'var(--bull)' : 'var(--bear)';
-        }
+        // Harga live tampil di badge teal sumbu Y & data window kiri atas (gaya DeepChart)
         // auto-follow
         if (this.panzoom.autoFollow) {
             this.vp.scrollToEnd(this.bars.len);
@@ -1124,39 +1656,41 @@ export class ChartApp {
             if (lo < Infinity)
                 vp.fitY(lo, hi);
         }
-        // 1. Watermark ATAS / DeepChart background signature
-        this.drawWatermark(vp);
+        // 1. (tanpa watermark besar — gaya DeepChart: hanya brand kecil kiri-bawah via .brand)
         // 2. Candles & Volume (WebGL if supported, otherwise Canvas 2D fallback)
         if (this.hasWebGL && glCtx) {
             const view = vp.clipView();
             candles.rebuild(bars, vp);
             candles.draw(glCtx, view);
-            volume.rebuild(bars, vp);
-            volume.draw(glCtx, view);
+            if (this.indVolume) {
+                volume.rebuild(bars, vp);
+                volume.draw(glCtx, view);
+            }
         }
         else {
             this.drawCandles2D(vp, bars);
-            this.drawVolume2D(vp, bars);
+            if (this.indVolume)
+                this.drawVolume2D(vp, bars);
         }
         // 3. Grid lines
         grid.draw(this.ovCtx, vp, this.tf);
-        // 4. Extrema High & Low Markers (ATAS style ▼ High / ▲ Low markers)
-        this.drawExtremaMarkers(vp, bars);
-        // 5. Draw TPO overlay (blocks, level lines, separators, nPOC) — hanya utk sumber utama
+        // (marker High/Low & garis ZigZag dihapus — nilai High/Low sudah tampil di
+        //  legend OHLC kiri-atas, gaya DeepChart yang bersih tanpa ornamen berlebih)
+        // 4. Draw TPO overlay (blocks, level lines, separators, nPOC) — hanya utk sumber utama
         if (this.source === 'main') {
             this.tpo.draw(this.ovCtx, vp, bars);
         }
-        // 6. Draw user drawings
+        // 5. Draw user drawings
         this.drawingRenderer.draw(this.ovCtx, vp, bars, this.drawingStore);
-        // 7. Draw axes (clears axis canvases)
+        // 6. Draw axes (clears axis canvases)
         const lastBarTs = bars.len > 0 ? bars.t[bars.len - 1] : 0;
         axis.drawY(this.yCtx, vp, this.tickSize, bars.lastPrice(), this.openPrice, lastBarTs, this.tf);
         axis.drawX(this.xCtx, vp, bars, this.tf);
-        // 8. Draw crosshair on overlay and price/time badges on axes (on top of axis labels)
+        // 7. Draw crosshair on overlay and price/time badges on axes (on top of axis labels)
         crosshair.draw(this.ovCtx, this.yCtx, this.xCtx, vp, bars, this.tf, this.tickSize);
-        crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize, this.tf);
-        this.updateBottomBar(bars, vp);
-        // 9. Current price horizontal line on overlay
+        crosshair.drawInfo(this.infoEl, bars, vp, this.tickSize, this.tf, `${this.symbol} · ${this.tfLabel(this.tf)}`);
+        this.updateHint();
+        // 8. Current price horizontal line on overlay
         const lastP = bars.lastPrice();
         if (lastP > 0 && lastP >= vp.yMin && lastP <= vp.yMax) {
             const y = Math.round(vp.yToScreen(lastP)) + 0.5;
@@ -1173,89 +1707,20 @@ export class ChartApp {
             this.ovCtx.restore();
         }
     }
-    /** Background symbol & timeframe watermark (khas ATAS / DeepChart) */
-    drawWatermark(vp) {
-        const dpr = vp.dpr || 1;
-        const ctx = this.ovCtx;
-        const centerX = vp.w / 2;
-        const centerY = vp.chartH / 2;
-        ctx.save();
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const fontSize = Math.min(Math.round(vp.w * 0.12), Math.round(64 * dpr));
-        ctx.font = `900 ${fontSize}px ui-monospace,SFMono-Regular,monospace`;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.038)';
-        ctx.fillText(`${this.symbol} • ${this.tfLabel(this.tf)}`, centerX, centerY - 12 * dpr);
-        const subSize = Math.max(Math.round(10 * dpr), Math.round(fontSize * 0.22));
-        ctx.font = `700 ${subSize}px ui-monospace,SFMono-Regular,monospace`;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.024)';
-        ctx.fillText('MCDASH • ATAS ORDER FLOW PROFILE', centerX, centerY + fontSize * 0.42);
-        ctx.restore();
-    }
-    /** Visible range High / Low extrema markers (panah ▼ H dan ▲ L khas ATAS) */
-    drawExtremaMarkers(vp, bars) {
-        if (bars.len === 0)
-            return;
-        const dpr = vp.dpr || 1;
-        const ctx = this.ovCtx;
-        const iStart = Math.max(0, Math.floor(vp.xMin));
-        const iEnd = Math.min(bars.len - 1, Math.ceil(vp.xMax));
-        if (iStart > iEnd)
-            return;
-        let maxH = -Infinity;
-        let maxIdx = -1;
-        let minL = Infinity;
-        let minIdx = -1;
-        for (let i = iStart; i <= iEnd; i++) {
-            if (bars.h[i] > maxH) {
-                maxH = bars.h[i];
-                maxIdx = i;
-            }
-            if (bars.l[i] < minL) {
-                minL = bars.l[i];
-                minIdx = i;
-            }
-        }
-        const dec = decimalsOf(this.tickSize);
-        ctx.save();
-        ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
-        ctx.textAlign = 'center';
-        // High marker (panah merah ▼ dan harga)
-        if (maxIdx >= 0) {
-            const x = vp.xToScreen(maxIdx);
-            const y = vp.yToScreen(maxH);
-            if (x >= 24 * dpr && x <= vp.w - 24 * dpr && y >= 14 * dpr && y <= vp.chartH) {
-                ctx.fillStyle = '#EF5350';
-                ctx.textBaseline = 'bottom';
-                ctx.fillText(`▼ H: ${fmtPrice(maxH, dec)}`, x, y - 4 * dpr);
-            }
-        }
-        // Low marker (panah hijau ▲ dan harga)
-        if (minIdx >= 0) {
-            const x = vp.xToScreen(minIdx);
-            const y = vp.yToScreen(minL);
-            if (x >= 24 * dpr && x <= vp.w - 24 * dpr && y >= 0 && y <= vp.chartH - 14 * dpr) {
-                ctx.fillStyle = '#26A69A';
-                ctx.textBaseline = 'top';
-                ctx.fillText(`▲ L: ${fmtPrice(minL, dec)}`, x, y + 4 * dpr);
-            }
-        }
-        ctx.restore();
-    }
     /** Canvas 2D fallback for candlesticks (used if WebGL2 is not available) */
     drawCandles2D(vp, bars) {
         const ctx = this.ovCtx;
         const dpr = vp.dpr || 1;
         const iStart = Math.max(0, Math.floor(vp.xMin) - 1);
         const iEnd = Math.min(bars.len - 1, Math.ceil(vp.xMax) + 1);
-        const candleWidth = Math.max(1, (vp.w / Math.max(1, vp.visibleBars)) * 0.75);
+        const candleWidth = Math.max(1, vp.barW * settings.data.bodyWidth * 2);
         const halfW = candleWidth / 2;
         ctx.save();
         for (let i = iStart; i <= iEnd; i++) {
             const o = bars.o[i], h = bars.h[i], l = bars.l[i], c = bars.c[i];
             const x = vp.xToScreen(i);
             const bull = c >= o;
-            const color = bull ? '#26A69A' : '#EF5350';
+            const color = bull ? settings.data.candleUp : settings.data.candleDown;
             const yO = vp.yToScreen(o);
             const yC = vp.yToScreen(c);
             const yH = vp.yToScreen(h);
@@ -1288,7 +1753,7 @@ export class ChartApp {
         if (maxVol <= 0)
             return;
         const volH = vp.chartH * vp.volFrac;
-        const candleWidth = Math.max(1, (vp.w / Math.max(1, vp.visibleBars)) * 0.75);
+        const candleWidth = Math.max(1, vp.barW * settings.data.bodyWidth * 2);
         const halfW = candleWidth / 2;
         ctx.save();
         for (let i = iStart; i <= iEnd; i++) {
@@ -1296,62 +1761,29 @@ export class ChartApp {
             const hBar = (bars.v[i] / maxVol) * volH * 0.95;
             const y = vp.h - hBar;
             const bull = bars.c[i] >= bars.o[i];
-            ctx.fillStyle = bull ? 'rgba(38, 166, 154, 0.28)' : 'rgba(239, 83, 80, 0.28)';
+            ctx.globalAlpha = settings.data.volumeAlpha;
+            ctx.fillStyle = bull ? settings.data.volumeUp : settings.data.volumeDown;
             ctx.fillRect(x - halfW, y, candleWidth, hBar);
         }
         ctx.restore();
     }
-    updateBottomBar(bars, vp) {
-        if (!this.sbTimeEl || bars.len === 0)
+    /** Petunjuk interaktif di bottom toolbar (saat tool gambar aktif / ada seleksi). */
+    updateHint() {
+        const el = this.btHintEl;
+        if (!el)
             return;
-        // Interactive guidance when drawing tool is active
         if (this.drawingStore.activeTool) {
             const toolTitle = this.toolName(this.drawingStore.activeTool);
-            if (this.drawingStore.pendingPoints.length === 0) {
-                this.sbTimeEl.textContent = `✏️ ${toolTitle}: Sentuh / Klik titik 1 • Esc batal`;
-            }
-            else {
-                this.sbTimeEl.textContent = `✏️ Tarik ke titik 2 untuk menyelesaikan ${toolTitle}`;
-            }
-            return;
+            el.textContent = this.drawingStore.pendingPoints.length === 0
+                ? `✏️ ${toolTitle}: Sentuh / Klik titik 1 • Esc batal`
+                : `✏️ Tarik ke titik 2 untuk menyelesaikan ${toolTitle}`;
         }
-        if (this.drawingStore.selectedId) {
-            this.sbTimeEl.textContent = `📌 1 gambar dipilih • Del / icon tong sampah untuk hapus`;
+        else if (this.drawingStore.selectedId) {
+            el.textContent = `📌 1 gambar dipilih • Del untuk hapus`;
         }
         else {
-            let idx = this.crosshair.visible ? Math.round(vp.screenToX(this.crosshair.mx)) : bars.len - 1;
-            if (idx < 0 || idx >= bars.len) {
-                idx = bars.len - 1;
-            }
-            const ts = bars.t[idx];
-            this.sbTimeEl.textContent = `${fmtDate(ts, this.tf)}`;
+            el.textContent = '';
         }
-        let idx = this.crosshair.visible ? Math.round(vp.screenToX(this.crosshair.mx)) : bars.len - 1;
-        if (idx < 0 || idx >= bars.len) {
-            idx = bars.len - 1;
-        }
-        const dec = decimalsOf(this.tickSize);
-        const o = bars.o[idx], h = bars.h[idx], l = bars.l[idx], c = bars.c[idx], v = bars.v[idx];
-        const diff = c - o;
-        const pct = o !== 0 ? (diff / o) * 100 : 0;
-        const bull = diff >= 0;
-        const cls = bull ? 'up' : 'dn';
-        if (this.sbOEl)
-            this.sbOEl.textContent = fmtPrice(o, dec);
-        if (this.sbHEl)
-            this.sbHEl.textContent = fmtPrice(h, dec);
-        if (this.sbLEl)
-            this.sbLEl.textContent = fmtPrice(l, dec);
-        if (this.sbCEl) {
-            this.sbCEl.textContent = fmtPrice(c, dec);
-            this.sbCEl.className = `val ${cls}`;
-        }
-        if (this.sbChgEl) {
-            this.sbChgEl.textContent = `${fmtChg(diff, dec)} (${fmtPct(pct)})`;
-            this.sbChgEl.className = `val ${cls}`;
-        }
-        if (this.sbVolEl)
-            this.sbVolEl.textContent = formatVol(v);
     }
     updateDrawingSelectionUI() {
         const selected = this.drawingStore.selectedId ? this.drawingStore.getDrawing(this.drawingStore.selectedId) : null;
@@ -1365,6 +1797,90 @@ export class ChartApp {
         else if (this.dtColorDotEl) {
             this.dtColorDotEl.style.backgroundColor = this.drawingStore.defaultStyle.color;
         }
+        this.syncObjectPanel();
+    }
+    // ------------------------------------------------------------ panel pengaturan objek drawing
+    /** Objek drawing yang sedang dipilih (bila ada). */
+    selDrawing() {
+        return this.drawingStore.selectedId ? this.drawingStore.getDrawing(this.drawingStore.selectedId) : undefined;
+    }
+    /** Terapkan mutasi style ke objek terpilih: simpan + render ulang + sinkron panel. */
+    applyObjStyle(mut) {
+        const d = this.selDrawing();
+        if (!d)
+            return;
+        mut(d);
+        this.drawingStore.saveToStorage(this.symbol);
+        if (this.dtColorDotEl)
+            this.dtColorDotEl.style.backgroundColor = d.style.color;
+        this.markDirty();
+        this.syncObjectPanel();
+    }
+    /** Panel pengaturan OBJEK drawing — tiap objek punya settingan sendiri
+     *  (warna, ketebalan, gaya garis, perpanjang, kunci, hapus). */
+    bindObjectPanel() {
+        this.buildSwatches(this.objColorsEl, () => this.selDrawing()?.style.color ?? '#2962FF', (c) => {
+            this.applyObjStyle((d) => { d.style.color = c; });
+        });
+        this.bindSegmented(this.objWidthEl, () => {
+            const d = this.selDrawing();
+            return d ? String(d.style.width) : '2';
+        }, (v) => {
+            this.applyObjStyle((d) => { d.style.width = parseFloat(v) || 2; });
+        });
+        this.bindSegmented(this.objDashEl, () => {
+            const d = this.selDrawing();
+            return d ? dashKeyOf(d.style.dash) : 'solid';
+        }, (v) => {
+            this.applyObjStyle((d) => { d.style.dash = dashArrayOf(v); });
+        });
+        this.bindSegmented(this.objExtendEl, () => {
+            const d = this.selDrawing();
+            return d?.style.extend ?? 'none';
+        }, (v) => {
+            this.applyObjStyle((d) => { d.style.extend = v; });
+        });
+        if (this.objLockEl) {
+            this.objLockEl.addEventListener('change', () => {
+                const d = this.selDrawing();
+                if (!d)
+                    return;
+                d.locked = this.objLockEl.checked;
+                this.drawingStore.saveToStorage(this.symbol);
+                this.markDirty();
+            });
+        }
+        if (this.objDeleteEl) {
+            this.objDeleteEl.addEventListener('click', () => this.deleteSelectedDrawing());
+        }
+    }
+    /** Tampilkan/sembunyikan & isi panel objek sesuai seleksi saat ini. */
+    syncObjectPanel() {
+        const d = this.selDrawing();
+        if (!this.objPanelEl)
+            return;
+        this.objPanelEl.classList.toggle('open', !!d);
+        if (!d)
+            return;
+        if (this.objTitleEl)
+            this.objTitleEl.textContent = this.toolName(d.type).toUpperCase();
+        this.syncSwatches(this.objColorsEl, d.style.color);
+        this.syncSegmented(this.objWidthEl, String(d.style.width));
+        this.syncSegmented(this.objDashEl, dashKeyOf(d.style.dash));
+        if (this.objExtendBlockEl)
+            this.objExtendBlockEl.style.display = d.type === 'trendline' ? '' : 'none';
+        this.syncSegmented(this.objExtendEl, d.style.extend ?? 'none');
+        if (this.objLockEl)
+            this.objLockEl.checked = d.locked;
+    }
+    /** Hapus objek terpilih (dipakai tombol panel objek & toolbar & keyboard). */
+    deleteSelectedDrawing() {
+        if (!this.drawingStore.selectedId)
+            return;
+        this.drawingStore.removeDrawing(this.drawingStore.selectedId);
+        this.drawingStore.saveToStorage(this.symbol);
+        this.updateDrawingSelectionUI();
+        this.markDirty();
     }
     cycleDrawingColor() {
         const curColor = this.drawingStore.defaultStyle.color.toUpperCase();
@@ -1424,4 +1940,19 @@ export class ChartApp {
         }
         return Math.pow(10, -maxDec);
     }
+}
+/** Pemetaan kunci gaya garis ↔ array dash untuk panel pengaturan objek. */
+function dashArrayOf(key) {
+    if (key === 'dash')
+        return [6, 4];
+    if (key === 'dot')
+        return [1.5, 3.5];
+    return [];
+}
+function dashKeyOf(dash) {
+    if (!dash || dash.length === 0)
+        return 'solid';
+    if (dash[0] <= 2)
+        return 'dot';
+    return 'dash';
 }

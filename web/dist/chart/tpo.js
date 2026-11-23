@@ -1,3 +1,4 @@
+import { settings } from './settings.js';
 export class TpoRenderer {
     data = null;
     activeTag = 'S'; // 'S' | 'D' | 'M' | 'W' | null (null = off)
@@ -13,9 +14,19 @@ export class TpoRenderer {
         this.activeTag = sequence[nextIdx];
         return this.activeTag ?? 'OFF';
     }
+    /** Set profil langsung dari panel Indikator (null = OFF). */
+    setProfile(tag) {
+        this.activeTag = ['S', 'D', 'M', 'W'].includes(tag ?? '') ? tag : null;
+    }
     toggleNPOC() {
         this.showNPOC = !this.showNPOC;
         return this.showNPOC;
+    }
+    setNPOC(on) {
+        this.showNPOC = on;
+    }
+    setLetters(on) {
+        this.showLetters = on;
     }
     /**
      * Find screen X for a unix timestamp (in seconds) by interpolating barBuffer timestamps.
@@ -72,7 +83,8 @@ export class TpoRenderer {
     draw(ctx, vp, bars) {
         if (!this.data || !this.activeTag)
             return;
-        const profile = this.data.profiles[this.activeTag];
+        // Data TPO bisa kosong (server belum siap / sumber tanpa TPO) — jangan crash.
+        const profile = this.data.profiles?.[this.activeTag];
         if (!profile || !profile.periods || profile.periods.length === 0)
             return;
         const chartW = vp.w;
@@ -108,7 +120,7 @@ export class TpoRenderer {
             ctx.stroke();
             // Session Name Header
             ctx.setLineDash([]);
-            ctx.font = `600 ${Math.round(10 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+            ctx.font = `600 ${Math.round(10 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
             ctx.fillStyle = '#9598A1';
             ctx.textAlign = 'left';
             ctx.fillText(`╎ ${period.name}`, xStart + 4 * dpr, 18 * dpr);
@@ -121,7 +133,8 @@ export class TpoRenderer {
                         maxCount = r.count;
                 }
                 const periodWidth = Math.abs(xEnd - xStart);
-                const maxHistWidth = Math.min(periodWidth * 0.70, 280 * dpr);
+                // Lebar histogram TPO bisa diatur dari Panel Indikator → parameter TPO.
+                const maxHistWidth = Math.min(periodWidth * settings.data.tpoWidth, 280 * dpr);
                 for (const row of period.rows) {
                     if (row.price < vp.yMin || row.price > vp.yMax)
                         continue;
@@ -142,7 +155,7 @@ export class TpoRenderer {
                     ctx.fillRect(xStart, yCenter - rowHeight / 2, barWidth, Math.max(1 * dpr, rowHeight - 0.5 * dpr));
                     // Draw letters if zoomed in enough vertically
                     if (this.showLetters && rowHeight >= 11 * dpr && barWidth > 15 * dpr) {
-                        ctx.font = `${Math.round(9 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+                        ctx.font = `${Math.round(9 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
                         ctx.fillStyle = row.is_poc ? '#FF8A80' : row.in_va ? '#90CAF9' : '#B0BEC5';
                         ctx.textAlign = 'left';
                         ctx.fillText(row.letters, xStart + 3 * dpr, yCenter + 3 * dpr, barWidth - 4 * dpr);
@@ -223,7 +236,7 @@ export class TpoRenderer {
         ctx.stroke();
         // Naked POC Tag near right edge
         const tag = `nPOC ${period.name}: ${period.poc.toFixed(2)}`;
-        ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
         const tw = ctx.measureText(tag).width;
         const pad = 6 * dpr;
         const badgeH = 16 * dpr;
@@ -243,7 +256,7 @@ export class TpoRenderer {
     }
     drawLevelBadge(ctx, label, price, x, y, color, dpr) {
         const text = `${label} ${price.toFixed(2)}`;
-        ctx.font = `bold ${Math.round(9.5 * dpr)}px ui-monospace,SFMono-Regular,monospace`;
+        ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
         const tw = ctx.measureText(text).width;
         const pad = 5 * dpr;
         const badgeH = 15 * dpr;

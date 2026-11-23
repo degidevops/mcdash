@@ -10,7 +10,7 @@ export type OnTpo = (data: ChartTpoData) => void;
 /** Frame chart live dari sumber alternatif: (src, tf, full, bars) */
 export type OnChartFrame = (src: string, tf: number, full: boolean, bars: BarRaw[]) => void;
 
-export interface ChartSrcOption { id: string; label: string }
+export interface ChartSrcOption { id: string; label: string; symbol: string }
 export interface ChartSrcInfo { primary: string; options: ChartSrcOption[] }
 
 export class ChartClient {
