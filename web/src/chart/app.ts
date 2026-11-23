@@ -106,6 +106,11 @@ export class ChartApp {
   private source: ChartSource = 'main'; // sumber data aktif (main = sesuai config server)
   private srcInfo: ChartSrcInfo | null = null;
   private refetchSeq = 0; // pembatal refetch yang sedang berjalan bila ada permintaan lebih baru
+  private barCount = 500;        // jumlah bar yang diminta per fetch (dropdown "bar" di header)
+  private cntSelEl: HTMLSelectElement | null = null;
+  private bufReady = false;      // buffer berisi data (source, tf) aktif — false selama penggantian berjalan
+  private loadingOlder = false;  // lazy-load history lebih lama sedang berjalan
+  private noMoreHistory = false; // server tidak punya history lebih lama lagi utk (source, tf) aktif
   private tickSize = 0.01;
   private openPrice = 0;
   private dirty = true;
@@ -177,6 +182,25 @@ export class ChartApp {
       });
     }
 
+    // Dropdown jumlah bar per fetch (500 / 2.000 / 20.000 / 100.000). History lebih lama dari itu
+    // diambil OTOMATIS saat chart di-pan ke kiri mendekati tepi data (lazy-load, lihat loadOlder).
+    this.cntSelEl = document.getElementById('cntSel') as HTMLSelectElement | null;
+    if (this.cntSelEl) {
+      try {
+        const saved = parseInt(localStorage.getItem('mcdash.chart.count') || '', 10);
+        if ([500, 2000, 20000, 100000].includes(saved)) this.barCount = saved;
+      } catch { /* ignore */ }
+      this.cntSelEl.value = String(this.barCount);
+      this.cntSelEl.addEventListener('change', () => {
+        const v = parseInt((this.cntSelEl as HTMLSelectElement).value, 10);
+        if ([500, 2000, 20000, 100000].includes(v)) {
+          this.barCount = v;
+          try { localStorage.setItem('mcdash.chart.count', String(v)); } catch { /* ignore */ }
+          this.refetchBars();
+        }
+      });
+    }
+
     // Client
     this.client = new ChartClient(
       (bars) => { this.bars.load(bars); this.fitAndRender(); },
@@ -191,7 +215,16 @@ export class ChartApp {
         if (src !== this.source || tf !== this.tf) return;
         if (full) {
           const wasEmpty = this.bars.len === 0;
+          if (!wasEmpty && frameBars.length < this.bars.len) {
+            // Frame "full" hanya tail 150 bar. Buffer lokal berisi history lebih banyak (hasil
+            // fetch REST / lazy-load, termasuk bar lama yang server pertahankan) — jangan ditimpa;
+            // muat ulang penuh agar bar terbaru fresh tanpa memangkas history yang sudah dimuat.
+            this.refetchBars();
+            return;
+          }
           this.bars.load(frameBars);
+          this.bufReady = true;
+          this.noMoreHistory = false;
           if (this.openPrice === 0 && frameBars.length > 0) this.openPrice = frameBars[0].o;
           if (wasEmpty) this.fitAndRender();
         } else {
@@ -209,7 +242,7 @@ export class ChartApp {
       document.getElementById('yAxis')!,
       document.getElementById('xAxis')!,
       this.vp,
-      () => this.markDirty(),
+      () => this.onViewportChanged(),
       (x, y) => { this.crosshair.update(x, y); this.markDirty(); },
       () => { this.crosshair.hide(); this.markDirty(); },
       (follow) => this.updateAutoFollowBtn(follow),
@@ -349,16 +382,20 @@ export class ChartApp {
   /** Muat ulang bar utk (source, tf) aktif dengan retry — feed alternatif butuh waktu spawn. */
   private async refetchBars(): Promise<void> {
     const seq = ++this.refetchSeq;
+    this.bufReady = false; // tahan lazy-load selama pengambilan berjalan
+    this.noMoreHistory = false;
     const lbl = this.source === 'main' ? '' : this.srcLabel(this.source);
     this.statusEl.textContent = lbl ? `Memuat data ${lbl}…` : 'Memuat data…';
     for (let retry = 0; retry <= 30; retry++) {
       try {
-        const bars = await this.client.fetchBars(this.tf);
+        const bars = await this.client.fetchBars(this.tf, this.barCount);
         if (seq !== this.refetchSeq) return;
         if (bars.length > 0) {
           this.bars.load(bars);
           this.openPrice = bars[0].o;
           this.tickSize = this.detectTickSize(bars);
+          this.bufReady = true;
+          this.noMoreHistory = bars.length < this.barCount; // kolam lebih kecil dari permintaan = habis
           this.fitAndRender();
           this.statusEl.textContent = '';
           return;
@@ -373,6 +410,36 @@ export class ChartApp {
       }
       await new Promise(r => setTimeout(r, 1000));
       if (seq !== this.refetchSeq) return;
+    }
+  }
+
+  /** Dipanggil tiap pan/zoom: muat history lebih lama saat tepi kiri panduan mendekati tepi data. */
+  private onViewportChanged(): void {
+    this.markDirty();
+    if (this.vp.xMin < 10) this.loadOlder();
+  }
+
+  /** Lazy-load: ambil `barCount` bar lebih lama dari bar terlama yang sudah ada di buffer,
+   *  lalu sisipkan di depan tanpa menggeser tampilan (viewport ikut digeser). */
+  private async loadOlder(): Promise<void> {
+    if (this.loadingOlder || this.noMoreHistory || !this.bufReady || this.bars.len === 0) return;
+    this.loadingOlder = true;
+    const tf = this.tf, src = this.source, oldest = this.bars.t[0];
+    try {
+      const older = await this.client.fetchBars(tf, this.barCount, undefined, oldest);
+      if (tf !== this.tf || src !== this.source) return; // pengguna ganti tf/sumber saat menunggu
+      if (older.length === 0) {
+        this.noMoreHistory = true; // kolam sumber sudah habis di sisi server
+        return;
+      }
+      this.bars.prepend(older);
+      // Semua indeks bar bergeser sebanyak jumlah bar baru — geser viewport agar tampilan tetap.
+      this.vp.xMin += older.length;
+      this.vp.xMax += older.length;
+      if (older.length < this.barCount) this.noMoreHistory = true;
+      this.markDirty();
+    } catch { /* jaringan gagal — dicoba lagi pada pan berikutnya */ } finally {
+      this.loadingOlder = false;
     }
   }
 
@@ -409,12 +476,12 @@ export class ChartApp {
         case 'ArrowLeft':
           this.vp.pan(50, 0);
           this.panzoom.setAutoFollow(false);
-          this.markDirty();
+          this.onViewportChanged();
           break;
         case 'ArrowRight':
           this.vp.pan(-50, 0);
           this.panzoom.setAutoFollow(false);
-          this.markDirty();
+          this.onViewportChanged();
           break;
         case 'p':
         case 'P': {

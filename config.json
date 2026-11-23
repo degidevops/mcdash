@@ -87,7 +87,7 @@
   "_help": {
     "timezone": "Zona waktu IANA untuk semua batas hari/minggu/sesi, mis. America/New_York, Europe/London, Asia/Jakarta.",
     "point": "Ukuran 1 point. 0 = otomatis mengikuti info simbol dari sumber data (TradingView OANDA XAUUSD memberi 0.001; MT5 memberi point broker). Isi manual bila ingin menyamakan.",
-    "history_bars": "Target jumlah bar riwayat per timeframe (akun anonim TradingView dibatasi; MT5 dibatasi 'Max bars in chart' terminal).",
+    "history_bars": "Target jumlah bar riwayat per timeframe, boleh sampai 2.000.000. Catatan: akun anonim TradingView dibatasi (biasanya puluhan ribu bar); Binance diambil per halaman 1000 bar — riwayat sangat panjang butuh beberapa menit dan bisa kena 429 (otomatis menunggu sesuai Retry-After lalu melanjutkan, tidak mengulang dari nol); MT5 dibatasi 'Max bars in chart' terminal dan kedalaman data broker. Halaman /chart memuat sebanyak pilihan dropdown 'bar' dan otomatis mengambil history lebih lama saat di-pan ke kiri.",
     "tv_symbol": "Simbol TradingView untuk pilihan sumber 'TradingView' di dropdown halaman /chart, dipakai saat sumber utama BUKAN tradingview. Kosong = pakai general.symbol.",
     "atr_feed_tf": "Timeframe untuk ATR (menit). 0 = otomatis (M15 bila ada).",
     "enable": "true/false: aktifkan profil ini.",

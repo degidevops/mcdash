@@ -125,6 +125,12 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
       <button data-tf="1440">D</button>
     </div>
     <span class="sp">
+      <select id="cntSel" class="src-sel" title="Jumlah bar yang dimuat per fetch. History lebih lama diambil otomatis saat chart di-pan ke kiri.">
+        <option value="500">500 bar</option>
+        <option value="2000">2.000 bar</option>
+        <option value="20000">20.000 bar</option>
+        <option value="100000">100.000 bar</option>
+      </select>
       <select id="srcSel" class="src-sel" title="Sumber data chart (TPO hanya tersedia untuk sumber utama)"><option value="main">Memuat…</option></select>
       <button id="btnTpo" title="Ganti Profil TPO (Shortcut: P)">📊 TPO: S</button>
       <button id="btnNPoc" class="on" title="Toggle Naked POC Lines (Shortcut: N)">nPOC</button>

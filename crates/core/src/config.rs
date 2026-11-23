@@ -49,7 +49,7 @@ fn help() -> Value {
     json!({
         "timezone": "Zona waktu IANA untuk semua batas hari/minggu/sesi, mis. America/New_York, Europe/London, Asia/Jakarta.",
         "point": "Ukuran 1 point. 0 = otomatis mengikuti info simbol dari sumber data (TradingView OANDA XAUUSD memberi 0.001; MT5 memberi point broker). Isi manual bila ingin menyamakan.",
-        "history_bars": "Target jumlah bar riwayat per timeframe (akun anonim TradingView dibatasi; MT5 dibatasi 'Max bars in chart' terminal).",
+        "history_bars": "Target jumlah bar riwayat per timeframe, boleh sampai 2.000.000. Catatan: akun anonim TradingView dibatasi (biasanya puluhan ribu bar); Binance diambil per halaman 1000 bar — riwayat sangat panjang butuh beberapa menit dan bisa kena 429 (otomatis menunggu sesuai Retry-After lalu melanjutkan, tidak mengulang dari nol); MT5 dibatasi 'Max bars in chart' terminal dan kedalaman data broker.",
         "tv_symbol": "Opsional: simbol TradingView untuk pilihan sumber data di halaman /chart (dropdown 'Sumber'), mis. OANDA:XAUUSD. Kosong = pakai general.symbol. Berguna bila general.symbol bukan format TradingView (mis. XAUUSDT) tapi Anda tetap ingin membandingkan dengan chart TradingView.",
         "atr_feed_tf": "Timeframe untuk ATR (menit). 0 = otomatis (M15 bila ada).",
         "enable": "true/false: aktifkan profil ini.",
@@ -276,7 +276,7 @@ pub fn parse(user: &Value) -> Result<Config, String> {
         symbol: pystr(&g["symbol"]),
         timezone: tz,
         point: num_f("general", "point", &g["point"], 0.0, 1000.0)?,
-        history_bars: num_i("general", "history_bars", &g["history_bars"], 100, 200000)?,
+        history_bars: num_i("general", "history_bars", &g["history_bars"], 100, 2_000_000)?,
         tv_symbol: pystr(&g["tv_symbol"]).trim().to_string(),
         atr_period: num_i("general", "atr_period", &g["atr_period"], 1, 500)? as usize,
         atr_feed_tf: num_i("general", "atr_feed_tf", &g["atr_feed_tf"], 0, 1440)?,
@@ -319,4 +319,31 @@ pub fn describe(cfg: &Config) -> String {
         ));
     }
     l.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_cfg(history_bars: Value) -> Value {
+        json!({
+            "general": { "symbol": "OANDA:XAUUSD", "timezone": "America/New_York", "history_bars": history_bars },
+            "daily": { "enable": true }
+        })
+    }
+
+    /// history_bars besar (kebutuhan analisis history sangat panjang) harus diterima, bukan ditolak.
+    #[test]
+    fn history_bars_sampai_2_juta_diterima() {
+        let cfg = parse(&base_cfg(json!(2_000_000))).expect("2.000.000 harus valid");
+        assert_eq!(cfg.history_bars, 2_000_000);
+        let cfg = parse(&base_cfg(json!(200_000))).expect("200.000 tetap valid");
+        assert_eq!(cfg.history_bars, 200_000);
+    }
+
+    #[test]
+    fn history_bars_di_luar_batas_ditolak() {
+        assert!(parse(&base_cfg(json!(99))).is_err()); // di bawah minimum 100
+        assert!(parse(&base_cfg(json!(2_000_001))).is_err()); // di atas maksimum
+    }
 }

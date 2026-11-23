@@ -147,6 +147,9 @@ pub fn tick_size(info: &Value, symbol: &str) -> Result<Option<f64>, String> {
 
 enum Fail {
     Transient(String),
+    /// Kena rate limit (HTTP 429/418): tunggu sejumlah detik ini (dari header Retry-After) lalu
+    /// coba halaman yang sama lagi — pengambilan riwayat TIDAK diulang dari nol.
+    RateLimit(u64),
     Fatal(String),
 }
 
@@ -155,12 +158,19 @@ fn get_json(url: &str) -> Result<Value, Fail> {
     match agent.get(url).call() {
         Ok(r) => r.into_json::<Value>().map_err(|e| Fail::Transient(format!("respons bukan JSON: {e}"))),
         Err(ureq::Error::Status(code, resp)) => {
+            // Retry-After (detik) dikirim Binance saat 429/418; pakai 5 dtk bila header tidak ada.
+            let retry_after = resp
+                .header("retry-after")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(5)
+                .clamp(2, 120);
             let body = resp.into_string().unwrap_or_default();
             let msg = format!("Binance HTTP {code}: {}", body.chars().take(200).collect::<String>());
             match code {
                 451 | 403 => Err(Fail::Fatal(format!("{msg} — Binance menolak IP/lokasi ini; coba VPN/proxy atau server di wilayah lain"))),
                 400 | 404 => Err(Fail::Fatal(msg)), // mis. -1121 Invalid symbol, interval tidak valid
-                _ => Err(Fail::Transient(msg)),     // 418/429 (kena rate limit), 5xx
+                418 | 429 => Err(Fail::RateLimit(retry_after)), // rate limit / ban sementara: tunggu lalu lanjut
+                _ => Err(Fail::Transient(msg)),     // 5xx dan lainnya
             }
         }
         Err(e) => Err(Fail::Transient(e.to_string())),
@@ -168,16 +178,36 @@ fn get_json(url: &str) -> Result<Value, Fail> {
 }
 
 /// Riwayat mundur dari bar terbaru sampai `target` bar (atau awal data simbol).
-fn fetch_history(market: Market, symbol: &str, iv: &str, target: i64) -> Result<Bars, Fail> {
+/// `bars` adalah akumulator yang bertahan antar percobaan: koneksi putus / rate limit di tengah
+/// jalan TIDAK mengulang dari nol — halaman berikutnya dilanjutkan dari bar terlama yang sudah
+/// ada. Untuk target besar (mis. 200.000+ bar) ini wajib, karena Binance hanya memberi 1000 bar
+/// per permintaan dan bisa mengirim 429 di tengah pengambilan.
+fn fetch_history(market: Market, symbol: &str, iv: &str, target: i64, bars: &mut Bars) -> Result<(), Fail> {
     let base = market.rest_base();
-    let mut bars = Bars::new();
-    let mut end: Option<i64> = None;
+    // Resume: mulai dari SEBELUM bar terlama yang sudah terkumpul (bila ada).
+    let mut end = bars.keys().next().map(|&t| t - 1);
     while (bars.len() as i64) < target {
         let mut url = format!("{base}{}?symbol={symbol}&interval={iv}&limit={PAGE}", market.klines_path());
         if let Some(e) = end {
             url.push_str(&format!("&endTime={e}"));
         }
-        let rows = parse_klines(&get_json(&url)?).map_err(Fail::Transient)?;
+        let rows = {
+            let mut tries = 0u32;
+            loop {
+                match get_json(&url) {
+                    Ok(v) => break parse_klines(&v).map_err(Fail::Transient)?,
+                    Err(Fail::RateLimit(wait)) => {
+                        tries += 1;
+                        if tries >= 10 {
+                            return Err(Fail::Transient("terus-menerus kena rate limit (429/418)".into()));
+                        }
+                        eprintln!("[binance] kena rate limit, tunggu {wait} dtk lalu coba lagi ({tries}/10)");
+                        std::thread::sleep(Duration::from_secs(wait));
+                    }
+                    Err(e) => return Err(e), // bars tetap terisi; percobaan berikutnya lanjut dari sini
+                }
+            }
+        };
         let Some(&(first_ms, _)) = rows.first() else { break };
         let before = bars.len();
         let got = rows.len();
@@ -193,7 +223,7 @@ fn fetch_history(market: Market, symbol: &str, iv: &str, target: i64) -> Result<
     while (bars.len() as i64) > target {
         bars.pop_first(); // buang yang terlama kelebihan
     }
-    Ok(bars)
+    Ok(())
 }
 
 /// Bar dari `since_ms` (termasuk) sampai sekarang — mengisi celah setelah koneksi putus.
@@ -270,6 +300,9 @@ pub async fn run(id: u64, symbol: String, tf: i64, target: i64, market: Market, 
                 return;
             }
             Err(Fail::Transient(e)) => eprintln!("[binance M{}] terputus ({e}), reconnect {backoff}s", st.tf),
+            // RateLimit biasanya sudah ditunggu di dalam fetch_history; kalau lolos (mis. dari
+            // fetch_since), bar yang terkumpul tetap ada — reconnect lalu lanjut dari situ.
+            Err(Fail::RateLimit(wait)) => eprintln!("[binance M{}] rate limit, tunggu {wait} dtk sebelum reconnect", st.tf),
             Ok(()) => {}
         }
         if st.got_data {
@@ -301,7 +334,17 @@ async fn session(st: &mut State) -> Result<(), Fail> {
             st.point = blocking(move || fetch_tick(market, &sym)).await?;
         }
         let target = st.target;
-        st.bars = blocking(move || fetch_history(market, &symbol, iv, target)).await?;
+        // Akumulator ikut masuk task dan dikembalikan bersama hasilnya, supaya riwayat parsial
+        // yang sudah terkumpul tidak hilang saat koneksi terputus di tengah pengambilan —
+        // percobaan berikutnya melanjutkan dari bar terlama (resume), bukan dari nol.
+        let mut acc = std::mem::take(&mut st.bars);
+        let (acc, res) = blocking(move || {
+            let r = fetch_history(market, &symbol, iv, target, &mut acc);
+            Ok((acc, r))
+        })
+        .await?;
+        st.bars = acc;
+        res?;
         if st.bars.is_empty() {
             return Err(Fail::Fatal(format!("Binance tidak mengembalikan bar untuk {} {}", st.symbol, st.iv)));
         }

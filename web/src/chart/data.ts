@@ -31,6 +31,29 @@ export class BarBuffer {
     }
   }
 
+  /** Sisipkan bar LEBIH LAMA di depan (lazy-load saat pan ke kiri). Indeks semua bar yang sudah
+   *  ada bergeser sebanyak bars.length — pemanggil harus menggeser viewport-nya juga. */
+  prepend(bars: BarRaw[]): void {
+    if (bars.length === 0) return;
+    const need = this.len + bars.length;
+    if (this.cap < need) {
+      let cap = Math.max(this.cap, 4096);
+      while (cap < need) cap *= 2;
+      const grow = (old: Float64Array) => { const n = new Float64Array(cap); n.set(old.subarray(0, this.len), bars.length); return n; };
+      this.t = grow(this.t); this.o = grow(this.o); this.h = grow(this.h); this.l = grow(this.l); this.c = grow(this.c); this.v = grow(this.v);
+      this.cap = cap;
+    } else {
+      // geser konten [0, len) ke kanan sejauh bars.length (copyWithin aman untuk area tumpang tindih)
+      const shift = (arr: Float64Array) => arr.copyWithin(bars.length, 0, this.len);
+      shift(this.t); shift(this.o); shift(this.h); shift(this.l); shift(this.c); shift(this.v);
+    }
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
+      this.t[i] = b.t; this.o[i] = b.o; this.h[i] = b.h; this.l[i] = b.l; this.c[i] = b.c; this.v[i] = b.v;
+    }
+    this.len += bars.length;
+  }
+
   /** Update or append a single bar */
   upsert(bar: BarRaw): void {
     // find existing by timestamp (last few bars are most common)

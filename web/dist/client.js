@@ -235,12 +235,13 @@ function openHist(tag) {
         d.showModal();
 }
 function showStatus() {
-    if (!msg)
+    if (!msg?.s)
         return;
     const age = msg.now - msg.s.meta.ts + (Date.now() - recvAt) / 1000;
     const dead = age > 20;
-    $('dot').className = dead ? '' : 'ok';
-    $('st').textContent = dead ? `engine tidak merespons (${Math.round(age)} dtk)` : msg.s.meta.status;
+    const st = msg.s.meta.status;
+    $('dot').className = dead || st !== 'live' ? '' : 'ok';
+    $('st').textContent = dead ? `engine tidak merespons (${Math.round(age)} dtk)` : st;
 }
 // Posisikan baris "harga sekarang" tepat di tengah vertikal kotak level map.
 function centerLadder() {
@@ -252,7 +253,7 @@ function centerLadder() {
     wrap.scrollTop = top - wrap.clientHeight / 2 + px.offsetHeight / 2;
 }
 function render() {
-    if (!msg)
+    if (!msg?.s)
         return;
     const { meta, data: s } = msg.s;
     showStatus();
@@ -297,7 +298,7 @@ function onTick(j) {
     tick = { p: j.p, wall: j.wall, age0: j.age, recv: performance.now() };
     if (j.bias)
         full = j.bias; // server hanya mengirim bias bila berubah
-    if (msg?.s.data) {
+    if (msg?.s?.data) {
         msg.s.data.price = j.p;
         schedule();
     }
@@ -320,7 +321,7 @@ function connect() {
         if (k === 'tick')
             return onTick(j);
         if (k === 'meta') { // detak/ status sumber data, tanpa membawa ulang snapshot
-            if (msg) {
+            if (msg?.s) {
                 msg.s.meta = j.meta;
                 msg.now = j.now;
                 recvAt = Date.now();
@@ -328,6 +329,10 @@ function connect() {
             }
             return;
         }
+        // Frame k:"chart" adalah siaran khusus halaman /chart (server menyiar-kan ke semua klien WS).
+        // Snapshot selalu punya field "s"; apa pun tanpa "s" bukan snapshot dan tidak boleh menggantikan state.
+        if (k === 'chart' || !j.s)
+            return;
         msg = j;
         recvAt = Date.now();
         full = j.bias ?? null;

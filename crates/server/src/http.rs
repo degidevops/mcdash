@@ -82,6 +82,9 @@ struct ChartQuery {
     count: Option<usize>,
     /// "main" (bawaan) | "binance" | "tv" — sumber alternatif untuk halaman /chart.
     source: Option<String>,
+    /// Hanya bar yang LEBIH LAMA dari waktu ini (epoch detik) — lazy-load history
+    /// saat chart di-pan ke kiri melampaui data yang sudah dimuat.
+    before: Option<f64>,
 }
 
 fn pool_get<'a>(sh: &'a Shared, kind: u8, tf: i64) -> Option<&'a Bars> {
@@ -93,12 +96,14 @@ fn pool_get<'a>(sh: &'a Shared, kind: u8, tf: i64) -> Option<&'a Bars> {
 }
 
 /// Agregasi bar dari timeframe lebih kecil ke timeframe lebih besar (dalam detik).
-pub fn aggregate_bars(base: &Bars, target_tf_sec: i64) -> Bars {
+/// `upper` = hanya bar dengan ts < upper yang diagregasi (i64::MAX = semua) — untuk lazy-load
+/// supaya permintaan "history lebih lama" tidak perlu meng-agregasi seluruh kolam M1.
+pub fn aggregate_bars(base: &Bars, target_tf_sec: i64, upper: i64) -> Bars {
     let mut out = Bars::new();
     if target_tf_sec <= 0 {
         return out;
     }
-    for (&ts, &bar) in base {
+    for (&ts, &bar) in base.range(..upper) {
         let bucket = ts - (ts % target_tf_sec);
         out.entry(bucket)
             .and_modify(|b: &mut Bar| {
@@ -109,6 +114,20 @@ pub fn aggregate_bars(base: &Bars, target_tf_sec: i64) -> Bars {
             })
             .or_insert(bar);
     }
+    out
+}
+
+/// Ambil `count` bar terakhir dengan ts < `upper` (epoch detik; i64::MAX = tanpa batas), urut naik.
+/// Iterasi MUNDUR dari BTreeMap supaya biayanya hanya O(count) — tanpa menyalin seluruh kolam bar
+/// (penting saat kolam berisi ratusan ribu bar).
+fn bars_tail(bars: &Bars, count: usize, upper: i64) -> Vec<[f64; 6]> {
+    let mut out: Vec<[f64; 6]> = bars
+        .range(..upper)
+        .rev()
+        .take(count)
+        .map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v])
+        .collect();
+    out.reverse();
     out
 }
 
@@ -130,29 +149,28 @@ async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::
             drop(sh);
             if let Ok(mut sh) = app.shared.write() {
                 sh.chart_want.insert((k, tf), now_f());
+                sh.chart_keep.insert((k, tf), now_f()); // bar-nya juga diperpanjang umur keep-nya
             }
         }
         k
     };
+    let upper = q.before.map_or(i64::MAX, |b| (b.floor() as i64).max(0));
     let sh = app.shared.read().unwrap();
-    let bars = match pool_get(&sh, kind, tf) {
-        Some(b) if !b.is_empty() => b.clone(),
+    let arr = match pool_get(&sh, kind, tf) {
+        Some(b) if !b.is_empty() => bars_tail(b, count, upper),
         _ => {
             // Coba agregasi dari timeframe dasar lebih kecil yang ada pada kolam sumber yang sama
             let base_candidate = [1i64, 5, 15, 60, 240]
                 .into_iter()
                 .find(|&btf| btf < tf && pool_get(&sh, kind, btf).map_or(false, |b| !b.is_empty()));
             if let Some(btf) = base_candidate {
-                aggregate_bars(pool_get(&sh, kind, btf).unwrap(), tf * 60)
+                // upper sudah menyingkat input agregasi, jadi hasilnya boleh langsung dipotong
+                bars_tail(&aggregate_bars(pool_get(&sh, kind, btf).unwrap(), tf * 60, upper), count, i64::MAX)
             } else {
-                return json_resp(StatusCode::OK, "[]".into());
+                vec![]
             }
         }
     };
-    // Take the last `count` bars, output as array of arrays
-    let total = bars.len();
-    let skip = if total > count { total - count } else { 0 };
-    let arr: Vec<[f64; 6]> = bars.iter().skip(skip).map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
     json_resp(StatusCode::OK, serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into()))
 }
 
@@ -327,7 +345,7 @@ mod tests {
         base.insert(120, Bar { o: 107.0, h: 107.5, l: 95.0, c: 98.0, v: 25.0 });
 
         // Agregasi ke interval 300 detik (5m)
-        let agg = aggregate_bars(&base, 300);
+        let agg = aggregate_bars(&base, 300, i64::MAX);
         assert_eq!(agg.len(), 1);
         let b = agg.get(&0).expect("bucket 0 exists");
         assert_eq!(b.o, 100.0, "open should be first bar open");
@@ -335,5 +353,37 @@ mod tests {
         assert_eq!(b.l, 95.0, "low should be min of all bars");
         assert_eq!(b.c, 98.0, "close should be last bar close");
         assert_eq!(b.v, 50.0, "volume should be sum of all bars");
+    }
+
+    #[test]
+    fn aggregate_bars_menghormati_batas_upper() {
+        let mut base = Bars::new();
+        base.insert(0, Bar { o: 1.0, h: 1.0, l: 1.0, c: 1.0, v: 1.0 });
+        base.insert(60, Bar { o: 2.0, h: 2.0, l: 2.0, c: 2.0, v: 1.0 });
+        base.insert(120, Bar { o: 3.0, h: 3.0, l: 3.0, c: 3.0, v: 1.0 });
+        // upper = 60: hanya bar ts 0 yang diagregasi
+        let agg = aggregate_bars(&base, 300, 60);
+        assert_eq!(agg.len(), 1);
+        assert_eq!(agg.get(&0).unwrap().o, 1.0);
+    }
+
+    #[test]
+    fn bars_tail_ambil_tera_akhir_dan_menghormati_before() {
+        let mut base = Bars::new();
+        for i in 0..10i64 {
+            base.insert(i * 60, Bar { o: i as f64, h: i as f64, l: i as f64, c: i as f64, v: 1.0 });
+        }
+        // 3 bar terakhir, urut naik
+        let tail = bars_tail(&base, 3, i64::MAX);
+        assert_eq!(tail.len(), 3);
+        assert_eq!(tail[0][0], 7.0 * 60.0);
+        assert_eq!(tail[2][0], 9.0 * 60.0);
+        // before = 300 dtk -> hanya ts < 300 (0..240); 2 terakhir = 180 dan 240
+        let tail = bars_tail(&base, 2, 300);
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[0][0], 180.0);
+        assert_eq!(tail[1][0], 240.0);
+        // count lebih besar dari jumlah bar -> semua diberikan
+        assert_eq!(bars_tail(&base, 100, i64::MAX).len(), 10);
     }
 }

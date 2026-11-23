@@ -223,11 +223,12 @@ function openHist(tag: string): void {
 }
 
 function showStatus(): void {
-  if (!msg) return;
+  if (!msg?.s) return;
   const age = msg.now - msg.s.meta.ts + (Date.now() - recvAt) / 1000;
   const dead = age > 20;
-  $('dot').className = dead ? '' : 'ok';
-  $('st').textContent = dead ? `engine tidak merespons (${Math.round(age)} dtk)` : msg.s.meta.status;
+  const st = msg.s.meta.status;
+  $('dot').className = dead || st !== 'live' ? '' : 'ok';
+  $('st').textContent = dead ? `engine tidak merespons (${Math.round(age)} dtk)` : st;
 }
 
 // Posisikan baris "harga sekarang" tepat di tengah vertikal kotak level map.
@@ -240,7 +241,7 @@ function centerLadder(): void {
 }
 
 function render(): void {
-  if (!msg) return;
+  if (!msg?.s) return;
   const { meta, data: s } = msg.s;
   showStatus();
   const b = $('banner');
@@ -275,7 +276,7 @@ function schedule(): void {
 function onTick(j: TickMsg): void {
   tick = { p: j.p, wall: j.wall, age0: j.age, recv: performance.now() };
   if (j.bias) full = j.bias;                          // server hanya mengirim bias bila berubah
-  if (msg?.s.data) { msg.s.data.price = j.p; schedule(); }
+  if (msg?.s?.data) { msg.s.data.price = j.p; schedule(); }
 }
 function updateAge(): void {                                 // umur tick terakhir (sejak diterima engine dari TradingView)
   const el = $('age');
@@ -292,9 +293,12 @@ function connect(): void {
     const k = (j as { k?: string }).k;
     if (k === 'tick') return onTick(j as TickMsg);
     if (k === 'meta') {                                   // detak/ status sumber data, tanpa membawa ulang snapshot
-      if (msg) { msg.s.meta = (j as MetaMsg).meta; msg.now = (j as MetaMsg).now; recvAt = Date.now(); schedule(); }
+      if (msg?.s) { msg.s.meta = (j as MetaMsg).meta; msg.now = (j as MetaMsg).now; recvAt = Date.now(); schedule(); }
       return;
     }
+    // Frame k:"chart" adalah siaran khusus halaman /chart (server menyiar-kan ke semua klien WS).
+    // Snapshot selalu punya field "s"; apa pun tanpa "s" bukan snapshot dan tidak boleh menggantikan state.
+    if (k === 'chart' || !(j as Msg).s) return;
     msg = j as Msg; recvAt = Date.now();
     full = (j as Msg).bias ?? null;
     schedule();

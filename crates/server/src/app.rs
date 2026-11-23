@@ -71,6 +71,10 @@ pub struct Shared {
     pub chart_bars_ext: HashMap<(u8, i64), mcdash_core::Bars>,
     /// Permintaan terakhir per (sumber, tf) — bila tidak ada permintaan baru 15 menit, feed dimatikan.
     pub chart_want: HashMap<(u8, i64), f64>,
+    /// Terakhir kali bar (sumber, tf) benar-benar dipakai (permintaan API atau data feed baru).
+    /// Bar sumber alternatif dipertahankan 24 jam sejak waktu ini WALAU feed-nya sudah dimatikan,
+    /// supaya membuka ulang sumber yang sama tidak mengambil ulang seluruh riwayat dari nol.
+    pub chart_keep: HashMap<(u8, i64), f64>,
     /// Simbol TradingView untuk chart alternatif (config general.tv_symbol).
     pub chart_tv_symbol: String,
     pub chart_tpo: Option<mcdash_core::ChartTpoResponse>,

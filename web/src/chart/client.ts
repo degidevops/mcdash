@@ -41,10 +41,11 @@ export class ChartClient {
     return await resp.json();
   }
 
-  async fetchBars(tf: number, count = 500, source?: ChartSource): Promise<BarRaw[]> {
+  async fetchBars(tf: number, count = 500, source?: ChartSource, before?: number): Promise<BarRaw[]> {
     const src = source ?? this.source;
     const extra = src && src !== 'main' ? `&source=${src}` : '';
-    const resp = await fetch(`/api/chart-bars?tf=${tf}&count=${count}${extra}`);
+    const older = before !== undefined ? `&before=${before}` : '';
+    const resp = await fetch(`/api/chart-bars?tf=${tf}&count=${count}${extra}${older}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data: number[][] = await resp.json();
     return data.map(r => ({ t: r[0], o: r[1], h: r[2], l: r[3], c: r[4], v: r[5] }));

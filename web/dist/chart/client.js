@@ -23,10 +23,11 @@ export class ChartClient {
             throw new Error(`HTTP ${resp.status}`);
         return await resp.json();
     }
-    async fetchBars(tf, count = 500, source) {
+    async fetchBars(tf, count = 500, source, before) {
         const src = source ?? this.source;
         const extra = src && src !== 'main' ? `&source=${src}` : '';
-        const resp = await fetch(`/api/chart-bars?tf=${tf}&count=${count}${extra}`);
+        const older = before !== undefined ? `&before=${before}` : '';
+        const resp = await fetch(`/api/chart-bars?tf=${tf}&count=${count}${extra}${older}`);
         if (!resp.ok)
             throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();

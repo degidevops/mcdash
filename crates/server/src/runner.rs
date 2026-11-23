@@ -65,6 +65,7 @@ struct Runner {
     last_meta: f64,
     last_status: String,
     last_cfg_check: f64,
+    last_data: f64, // waktu event terakhir dari feed utama (bukan feed chart alternatif)
 }
 
 pub async fn run(app: Arc<App>, opts: Opts) -> Result<(), String> {
@@ -96,7 +97,7 @@ impl Runner {
             app, opts, tx, cfg: None, mtime: None, config_error: None, engine: None, symbol: String::new(), auto_point: None,
             bars: HashMap::new(), hist_done: HashSet::new(), next_id: 1, active: HashSet::new(), tv: HashMap::new(), chart_feeds: HashMap::new(), chart_cool: HashMap::new(), mt5: None, restart: vec![],
             dirty: false, force: false, last_build: 0.0, build_ms: 0.0, err: None, src_status: None, mt5_hello: false,
-            tick: None, tick_sent: 0.0, tick_dirty: false, last_bias: String::new(), last_meta: 0.0, last_status: String::new(), last_cfg_check: 0.0,
+            tick: None, tick_sent: 0.0, tick_dirty: false, last_bias: String::new(), last_meta: 0.0, last_status: String::new(), last_cfg_check: 0.0, last_data: 0.0,
         }
     }
 
@@ -262,8 +263,15 @@ impl Runner {
     }
 
     /// Sinkronkan feed sumber alternatif untuk /chart: nyalakan bila /api/chart-bars memintanya
-    /// (chart_want), matikan bila tidak ada permintaan baru 15 menit. Sumber = sumber utama tidak
-    /// perlu feed terpisah (sudah disediakan feed utama).
+    /// (chart_want), matikan bila tidak ada permintaan baru 15 menit. chart_want HANYA diperbarui
+    /// oleh permintaan API (bukan oleh event feed sendiri) — kalau tidak, feed yang hidup terus
+    /// memperbarui want-nya sendiri dan GC 15 menit tidak pernah jalan. Halaman /chart memanggil
+    /// ulang API tiap 4 menit agar feed tetap hidup selama halamannya terbuka.
+    /// Sumber = sumber utama tidak perlu feed terpisah (sudah disediakan feed utama).
+    /// Bar-nya sendiri (chart_bars_ext) tidak ikut dibuang saat feed mati: bar dipertahankan
+    /// 24 jam sejak terakhir dipakai (chart_keep), jadi membuka ulang sumber yang sama langsung
+    /// menampilkan history lama sambil feed baru menyegarkan datanya — penting untuk history
+    /// panjang (20.000+ bar) yang butuh waktu lama untuk diambil ulang dari nol.
     fn sync_chart_feeds(&mut self) {
         let now = now_f();
         let Some(cfg) = self.cfg.clone() else { return };
@@ -275,6 +283,18 @@ impl Runner {
         {
             let mut sh = self.app.shared.write().unwrap();
             sh.chart_want.retain(|_, t| now - *t < 900.0);
+            // Bar sumber alternatif dipertahankan 24 jam sejak terakhir dipakai, walau feed-nya
+            // sudah dimatikan setelah 15 menit tanpa permintaan (hemat koneksi, data tetap ada).
+            sh.chart_keep.retain(|_, t| now - *t < 86_400.0);
+            let expired: Vec<(u8, i64)> = sh
+                .chart_bars_ext
+                .keys()
+                .copied()
+                .filter(|k| !sh.chart_keep.contains_key(k))
+                .collect();
+            for k in expired {
+                sh.chart_bars_ext.remove(&k);
+            }
         }
         let wants: HashSet<(u8, i64)> = self
             .app
@@ -286,15 +306,12 @@ impl Runner {
             .copied()
             .filter(|(k, _)| *k != primary)
             .collect();
-        // Matikan feed yang sudah tidak diminta
+        // Matikan feed yang sudah tidak diminta (bar-nya DIPERTAHANKAN di chart_bars_ext)
         let gone: Vec<(u8, i64)> = self.chart_feeds.keys().copied().filter(|k| !wants.contains(k)).collect();
         for k in gone {
             if let Some((fid, h)) = self.chart_feeds.remove(&k) {
                 h.abort();
                 self.active.remove(&fid);
-            }
-            if let Ok(mut sh) = self.app.shared.write() {
-                sh.chart_bars_ext.remove(&k);
             }
         }
         self.chart_cool.retain(|_, at| now < *at);
@@ -336,7 +353,7 @@ impl Runner {
                 let tail: Vec<[f64; 6]> = bars.iter().rev().take(150).rev().map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
                 if let Ok(mut sh) = self.app.shared.write() {
                     sh.chart_bars_ext.insert(key, bars);
-                    sh.chart_want.insert(key, now_f());
+                    sh.chart_keep.insert(key, now_f()); // data baru tiba: umur keep-nya diperpanjang
                 }
                 let frame = format!(
                     "{{\"k\":\"chart\",\"src\":\"{src}\",\"tf\":{tf},\"full\":true,\"bars\":{}}}",
@@ -352,7 +369,7 @@ impl Runner {
                     for (ts, b) in &bars {
                         m.insert(*ts, *b);
                     }
-                    sh.chart_want.insert(key, now_f());
+                    sh.chart_keep.insert(key, now_f());
                 }
                 let frame = format!(
                     "{{\"k\":\"chart\",\"src\":\"{src}\",\"tf\":{tf},\"full\":false,\"bars\":{}}}",
@@ -407,6 +424,7 @@ impl Runner {
             sh.meta = meta;
             sh.chart_bars_ext.clear();
             sh.chart_want.clear();
+            sh.chart_keep.clear();
         }
         let _ = self.app.tx.send(frame);
     }
@@ -459,6 +477,7 @@ impl Runner {
         }
         match ev {
             FeedEvent::History { tf, bars, point } => {
+                self.last_data = now_f();
                 self.bars.insert(tf, bars.clone());
                 self.hist_done.insert(tf);
                 self.set_point(point);
@@ -469,6 +488,7 @@ impl Runner {
                 }
             }
             FeedEvent::Live { tf, bars } => {
+                self.last_data = now_f();
                 if !self.hist_done.contains(&tf) {
                     return;
                 }
@@ -492,8 +512,12 @@ impl Runner {
                     }
                 }
             }
-            FeedEvent::Price { price } => self.on_price(price),
+            FeedEvent::Price { price } => {
+                self.last_data = now_f();
+                self.on_price(price);
+            }
             FeedEvent::Hello { symbol, point } => {
+                self.last_data = now_f();
                 self.mt5_hello = true;
                 self.src_status = None;
                 if symbol != self.symbol {
@@ -545,7 +569,17 @@ impl Runner {
             }
         }
         match &self.engine {
-            Some(e) if e.ready(&self.bars) => "live".into(),
+            Some(e) if e.ready(&self.bars) => {
+                // "live" hanya bila feed utama masih mengirim data. Pasar tutup / feed terputus
+                // (reconnect transient tidak mengirim Died) tidak boleh tampil sebagai "live".
+                if self.last_data > 0.0 {
+                    let gap = now_f() - self.last_data;
+                    if gap > 45.0 {
+                        return format!("menunggu data feed ({gap:.0} dtk)");
+                    }
+                }
+                "live".into()
+            }
             Some(e) => format!(
                 "memuat riwayat: {}",
                 e.needed_tfs().iter().map(|tf| format!("M{tf} {}", if self.hist_done.contains(tf) { "✔" } else { "…" })).collect::<Vec<_>>().join(", ")
