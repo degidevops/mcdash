@@ -1,9 +1,10 @@
 {
   "general": {
-    "symbol": "XAUUSDT",
+    "symbol": "OANDA:XAUUSD",
     "timezone": "America/New_York",
     "point": 0,
     "history_bars": 20000,
+    "tv_symbol": "OANDA:XAUUSD",
     "atr_period": 14,
     "atr_feed_tf": 0
   },
@@ -77,7 +78,7 @@
     "feed_tf": 0
   },
   "source": {
-    "type": "binance",
+    "type": "tradingview",
     "mt5_listen": "127.0.0.1:9899",
     "mt5_symbol": "",
     "mt5_server_tz": "auto",
@@ -87,6 +88,7 @@
     "timezone": "Zona waktu IANA untuk semua batas hari/minggu/sesi, mis. America/New_York, Europe/London, Asia/Jakarta.",
     "point": "Ukuran 1 point. 0 = otomatis mengikuti info simbol dari sumber data (TradingView OANDA XAUUSD memberi 0.001; MT5 memberi point broker). Isi manual bila ingin menyamakan.",
     "history_bars": "Target jumlah bar riwayat per timeframe (akun anonim TradingView dibatasi; MT5 dibatasi 'Max bars in chart' terminal).",
+    "tv_symbol": "Simbol TradingView untuk pilihan sumber 'TradingView' di dropdown halaman /chart, dipakai saat sumber utama BUKAN tradingview. Kosong = pakai general.symbol.",
     "atr_feed_tf": "Timeframe untuk ATR (menit). 0 = otomatis (M15 bila ada).",
     "enable": "true/false: aktifkan profil ini.",
     "touch_letters": "First touch POC/VAH/VAL: level baru dianggap tersentuh bila harga memuat level selama N huruf TPO berurutan (default 2). Sumbu 1 huruf tidak menghapus status naked. 1 = cukup satu bar menyentuh (perilaku lama).",

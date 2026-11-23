@@ -22,6 +22,43 @@ pub struct TickState {
     pub bias_json: Option<String>,
 }
 
+/// Sumber data chart: 0 = sumber utama (config), 1 = Binance on-demand, 2 = TradingView on-demand.
+pub const CHART_SRC_MAIN: u8 = 0;
+pub const CHART_SRC_BINANCE: u8 = 1;
+pub const CHART_SRC_TV: u8 = 2;
+
+pub fn chart_src_name(kind: u8) -> &'static str {
+    match kind {
+        CHART_SRC_BINANCE => "binance",
+        CHART_SRC_TV => "tv",
+        _ => "main",
+    }
+}
+
+/// Simbol untuk feed Binance alternatif chart. Binance hanya mengenal kutipan USDT/USDC,
+/// jadi USD polos dari simbol TradingView/FX (XAUUSD, BTCUSD) dipetakan ke USDT.
+pub fn chart_binance_symbol(sym: &str) -> String {
+    let s = crate::feed::binance::normalize_symbol(sym);
+    if s.ends_with("USDT") || s.ends_with("USDC") || s.ends_with("FDUSD") || s.ends_with("BUSD") {
+        s
+    } else if let Some(base) = s.strip_suffix("USD") {
+        format!("{base}USDT")
+    } else {
+        s
+    }
+}
+
+/// Sumber utama dideteksi dari teks meta.source ("tradingview" | "binance …" | "mt5 …").
+pub fn primary_src_kind(meta_source: &str) -> u8 {
+    if meta_source == "tradingview" {
+        CHART_SRC_TV
+    } else if meta_source.starts_with("binance") {
+        CHART_SRC_BINANCE
+    } else {
+        CHART_SRC_MAIN
+    }
+}
+
 #[derive(Default)]
 pub struct Shared {
     pub meta: Meta,
@@ -29,6 +66,13 @@ pub struct Shared {
     pub snap_frame: Option<String>,
     pub tick: Option<TickState>,
     pub chart_bars: HashMap<i64, mcdash_core::Bars>,
+    /// Bar dari sumber alternatif untuk halaman /chart: (sumber, tf_menit) -> bars.
+    /// Feed-nya dinyalakan on-demand oleh runner bila /api/chart-bars memintanya.
+    pub chart_bars_ext: HashMap<(u8, i64), mcdash_core::Bars>,
+    /// Permintaan terakhir per (sumber, tf) — bila tidak ada permintaan baru 15 menit, feed dimatikan.
+    pub chart_want: HashMap<(u8, i64), f64>,
+    /// Simbol TradingView untuk chart alternatif (config general.tv_symbol).
+    pub chart_tv_symbol: String,
     pub chart_tpo: Option<mcdash_core::ChartTpoResponse>,
 }
 

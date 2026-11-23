@@ -27,6 +27,7 @@ pub struct Config {
     pub timezone: String,
     pub point: f64,
     pub history_bars: i64,
+    pub tv_symbol: String,
     pub atr_period: usize,
     pub atr_feed_tf: i64,
     pub profiles: Vec<ProfileCfg>,
@@ -35,7 +36,7 @@ pub struct Config {
 
 pub fn defaults() -> Value {
     json!({
-        "general": { "symbol": "OANDA:XAUUSD", "timezone": "America/New_York", "point": 0, "history_bars": 20000, "atr_period": 14, "atr_feed_tf": 0 },
+        "general": { "symbol": "OANDA:XAUUSD", "timezone": "America/New_York", "point": 0, "history_bars": 20000, "tv_symbol": "", "atr_period": 14, "atr_feed_tf": 0 },
         "daily": { "enable": true, "touch_letters": 2, "tpo_min": 15, "count": 5, "start_hour": 18, "start_minute": 0, "va_pct": 70, "va_method": "two_rows", "va_bound": "edge", "poc_rule": "mid", "va_tie_break": "up", "va_stop": "ceil", "ticks": 0, "rows": 80, "feed_tf": 0 },
         "sessional": { "enable": true, "touch_letters": 2, "tpo_min": 10, "count": 8, "session_hours": 6, "start_hour": 18, "start_minute": 0, "va_pct": 70, "va_method": "two_rows", "va_bound": "edge", "poc_rule": "mid", "va_tie_break": "up", "va_stop": "ceil", "ticks": 0, "rows": 80, "feed_tf": 0 },
         "micro": { "enable": true, "touch_letters": 2, "tpo_min": 10, "count": 8, "parts": 4, "va_pct": 70, "va_method": "two_rows", "va_bound": "edge", "poc_rule": "mid", "va_tie_break": "up", "va_stop": "ceil", "ticks": 0, "rows": 80, "feed_tf": 0 },
@@ -49,6 +50,7 @@ fn help() -> Value {
         "timezone": "Zona waktu IANA untuk semua batas hari/minggu/sesi, mis. America/New_York, Europe/London, Asia/Jakarta.",
         "point": "Ukuran 1 point. 0 = otomatis mengikuti info simbol dari sumber data (TradingView OANDA XAUUSD memberi 0.001; MT5 memberi point broker). Isi manual bila ingin menyamakan.",
         "history_bars": "Target jumlah bar riwayat per timeframe (akun anonim TradingView dibatasi; MT5 dibatasi 'Max bars in chart' terminal).",
+        "tv_symbol": "Opsional: simbol TradingView untuk pilihan sumber data di halaman /chart (dropdown 'Sumber'), mis. OANDA:XAUUSD. Kosong = pakai general.symbol. Berguna bila general.symbol bukan format TradingView (mis. XAUUSDT) tapi Anda tetap ingin membandingkan dengan chart TradingView.",
         "atr_feed_tf": "Timeframe untuk ATR (menit). 0 = otomatis (M15 bila ada).",
         "enable": "true/false: aktifkan profil ini.",
         "touch_letters": "First touch POC/VAH/VAL: level baru dianggap tersentuh bila harga memuat level selama N huruf TPO berurutan (default 2). Sumbu 1 huruf tidak menghapus status naked. 1 = cukup satu bar menyentuh (perilaku lama).",
@@ -275,6 +277,7 @@ pub fn parse(user: &Value) -> Result<Config, String> {
         timezone: tz,
         point: num_f("general", "point", &g["point"], 0.0, 1000.0)?,
         history_bars: num_i("general", "history_bars", &g["history_bars"], 100, 200000)?,
+        tv_symbol: pystr(&g["tv_symbol"]).trim().to_string(),
         atr_period: num_i("general", "atr_period", &g["atr_period"], 1, 500)? as usize,
         atr_feed_tf: num_i("general", "atr_feed_tf", &g["atr_feed_tf"], 0, 1440)?,
         profiles,

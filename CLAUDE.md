@@ -93,7 +93,7 @@ mcdash/
 - Branch `main`, pushed ke origin
 - Credential store configured
 
-### 🔲 AKTIF: M3 — Professional Trading Chart
+### ✅ SELESAI: M3 — Professional Trading Chart
 **Goal**: Halaman `/chart` — full professional trading chart bergaya ATAS/DeepChart
 
 **BACA PROPOSAL LENGKAP**: `.agents/docs/chart-proposal.md`
@@ -109,7 +109,16 @@ mcdash/
 2. **Phase 2**: Crosshair + Multi-TF + Info Box + Y-Drag + Auto-Follow (✅ Selesai)
 3. **Phase 3**: TPO Overlay + Level Lines (✅ Selesai)
 4. **Phase 4**: Drawing Tools (Trendline, Fib, HLine, Rect) (✅ Selesai)
-5. **Phase 5**: Polish (mobile, shortcuts, export) ← **SELANJUTNYA**
+5. **Phase 5**: Polish (mobile, shortcuts, export) (✅ Selesai)
+
+**Fitur sumber data chart (multi-source)**: dropdown di header `/chart` untuk ganti sumber
+on-demand tanpa mengubah sumber utama config — `main` (config), `binance` (feed publik
+Binance, simbol USD→USDT dipetakan otomatis), `tradingview` (feed WS anonim, simbol dari
+`general.tv_symbol`, fallback `general.symbol`). Backend: `Shared.chart_bars_ext` per
+`(kind, tf)` + `Runner.sync_chart_feeds()` (spawn on-demand, cooldown 10s, GC 15 menit),
+endpoint `GET /api/chart-bars?source=…` + `GET /api/chart-info`, frame WS
+`{"k":"chart","src",...,"tf","full","bars"}`. Frontend: merge live per-sumber, pilihan
+diingat localStorage, TPO overlay hanya untuk sumber utama.
 
 **Keputusan teknis yang sudah diambil**:
 - Layout: Price Y-axis (vertikal), Time X-axis (horizontal) — standar candlestick

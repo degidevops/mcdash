@@ -33,6 +33,9 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
 .sp a,.sp button{color:var(--mu);text-decoration:none;font:600 11px var(--mono);letter-spacing:.04em;background:none;border:1px solid var(--bd2);padding:4px 9px;border-radius:3px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
 .sp a:hover,.sp button:hover{color:var(--tx);border-color:var(--tx)}
 .sp button.on{color:var(--bull);border-color:var(--bull);background:rgba(38,166,154,0.1)}
+.src-sel{background:var(--bg2);border:1px solid var(--bd2);color:var(--tx);font:600 11px var(--mono);letter-spacing:.03em;padding:4px 5px;border-radius:3px;max-width:190px;cursor:pointer}
+.src-sel:focus{outline:none;border-color:var(--cur)}
+.sp button:disabled{opacity:0.35;cursor:not-allowed}
 #dot{width:7px;height:7px;border-radius:50%;background:var(--bear)}
 #dot.ok{background:var(--bull)}
 
@@ -122,6 +125,7 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
       <button data-tf="1440">D</button>
     </div>
     <span class="sp">
+      <select id="srcSel" class="src-sel" title="Sumber data chart (TPO hanya tersedia untuk sumber utama)"><option value="main">Memuat…</option></select>
       <button id="btnTpo" title="Ganti Profil TPO (Shortcut: P)">📊 TPO: S</button>
       <button id="btnNPoc" class="on" title="Toggle Naked POC Lines (Shortcut: N)">nPOC</button>
       <button id="btnExport" title="Export Screenshot PNG">📸</button>

@@ -45,6 +45,10 @@ struct Runner {
     next_id: u64,
     active: HashSet<u64>,
     tv: HashMap<i64, (u64, JoinHandle<()>)>,
+    /// Feed sumber alternatif untuk /chart: (sumber, tf) -> (id, handle). Dinyalakan on-demand.
+    chart_feeds: HashMap<(u8, i64), (u64, JoinHandle<()>)>,
+    /// Cooldown feed chart setelah gagal: (sumber, tf) -> waktu boleh coba lagi.
+    chart_cool: HashMap<(u8, i64), f64>,
     mt5: Option<Mt5Ctl>,
     restart: Vec<(i64, f64)>,
     dirty: bool,
@@ -76,6 +80,7 @@ pub async fn run(app: Arc<App>, opts: Opts) -> Result<(), String> {
                 r.flush_tick();
                 r.check_config();
                 r.restart_feeds();
+                r.sync_chart_feeds();
                 if r.maybe_rebuild() {
                     return Ok(()); // --once
                 }
@@ -89,7 +94,7 @@ impl Runner {
     fn new(app: Arc<App>, opts: Opts, tx: Tx) -> Runner {
         Runner {
             app, opts, tx, cfg: None, mtime: None, config_error: None, engine: None, symbol: String::new(), auto_point: None,
-            bars: HashMap::new(), hist_done: HashSet::new(), next_id: 1, active: HashSet::new(), tv: HashMap::new(), mt5: None, restart: vec![],
+            bars: HashMap::new(), hist_done: HashSet::new(), next_id: 1, active: HashSet::new(), tv: HashMap::new(), chart_feeds: HashMap::new(), chart_cool: HashMap::new(), mt5: None, restart: vec![],
             dirty: false, force: false, last_build: 0.0, build_ms: 0.0, err: None, src_status: None, mt5_hello: false,
             tick: None, tick_sent: 0.0, tick_dirty: false, last_bias: String::new(), last_meta: 0.0, last_status: String::new(), last_cfg_check: 0.0,
         }
@@ -178,7 +183,11 @@ impl Runner {
             SourceKind::TradingView | SourceKind::Binance => self.sync_tv(&cfg, &needed),
             SourceKind::Mt5 => self.sync_mt5(&cfg, &needed)?,
         }
+        let tv_sym = cfg.tv_symbol.clone();
         self.cfg = Some(cfg);
+        if let Ok(mut sh) = self.app.shared.write() {
+            sh.chart_tv_symbol = tv_sym;
+        }
         self.dirty = true;
         self.force = true;
         Ok(())
@@ -252,10 +261,129 @@ impl Runner {
         Ok(())
     }
 
+    /// Sinkronkan feed sumber alternatif untuk /chart: nyalakan bila /api/chart-bars memintanya
+    /// (chart_want), matikan bila tidak ada permintaan baru 15 menit. Sumber = sumber utama tidak
+    /// perlu feed terpisah (sudah disediakan feed utama).
+    fn sync_chart_feeds(&mut self) {
+        let now = now_f();
+        let Some(cfg) = self.cfg.clone() else { return };
+        let primary = match cfg.source.kind {
+            SourceKind::Binance => CHART_SRC_BINANCE,
+            SourceKind::TradingView => CHART_SRC_TV,
+            SourceKind::Mt5 => CHART_SRC_MAIN,
+        };
+        {
+            let mut sh = self.app.shared.write().unwrap();
+            sh.chart_want.retain(|_, t| now - *t < 900.0);
+        }
+        let wants: HashSet<(u8, i64)> = self
+            .app
+            .shared
+            .read()
+            .unwrap()
+            .chart_want
+            .keys()
+            .copied()
+            .filter(|(k, _)| *k != primary)
+            .collect();
+        // Matikan feed yang sudah tidak diminta
+        let gone: Vec<(u8, i64)> = self.chart_feeds.keys().copied().filter(|k| !wants.contains(k)).collect();
+        for k in gone {
+            if let Some((fid, h)) = self.chart_feeds.remove(&k) {
+                h.abort();
+                self.active.remove(&fid);
+            }
+            if let Ok(mut sh) = self.app.shared.write() {
+                sh.chart_bars_ext.remove(&k);
+            }
+        }
+        self.chart_cool.retain(|_, at| now < *at);
+        // Nyalakan feed yang diminta
+        for key in wants {
+            if self.chart_feeds.contains_key(&key) || self.chart_cool.contains_key(&key) {
+                continue;
+            }
+            let (kind, tf) = key;
+            let id = self.next_id;
+            self.next_id += 1;
+            self.active.insert(id);
+            let h = match kind {
+                CHART_SRC_BINANCE => tokio::spawn(binance::run(
+                    id,
+                    crate::app::chart_binance_symbol(&self.symbol),
+                    tf,
+                    cfg.history_bars,
+                    binance::Market::parse(&cfg.source.binance_market),
+                    self.tx.clone(),
+                )),
+                _ => {
+                    let sym = self.app.shared.read().map(|sh| sh.chart_tv_symbol.clone()).unwrap_or_default();
+                    let sym = if sym.is_empty() { self.symbol.clone() } else { sym };
+                    tokio::spawn(tradingview::run(id, sym, tf, cfg.history_bars, self.tx.clone()))
+                }
+            };
+            self.chart_feeds.insert(key, (id, h));
+        }
+    }
+
+    /// Event dari feed sumber alternatif: simpan bar terpisah + siarkan frame khusus chart.
+    /// Tidak menyentuh tick harga utama — sumber alternatif hanya untuk tampilan chart.
+    fn handle_chart_event(&mut self, key: (u8, i64), ev: FeedEvent) {
+        let (kind, tf) = key;
+        let src = chart_src_name(kind);
+        match ev {
+            FeedEvent::History { bars, .. } => {
+                let tail: Vec<[f64; 6]> = bars.iter().rev().take(150).rev().map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
+                if let Ok(mut sh) = self.app.shared.write() {
+                    sh.chart_bars_ext.insert(key, bars);
+                    sh.chart_want.insert(key, now_f());
+                }
+                let frame = format!(
+                    "{{\"k\":\"chart\",\"src\":\"{src}\",\"tf\":{tf},\"full\":true,\"bars\":{}}}",
+                    serde_json::to_string(&tail).unwrap_or_default()
+                );
+                let _ = self.app.tx.send(frame);
+            }
+            FeedEvent::Live { bars, .. } => {
+                let tail: Vec<[f64; 6]> = bars.iter().map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
+                {
+                    let mut sh = self.app.shared.write().unwrap();
+                    let m = sh.chart_bars_ext.entry(key).or_default();
+                    for (ts, b) in &bars {
+                        m.insert(*ts, *b);
+                    }
+                    sh.chart_want.insert(key, now_f());
+                }
+                let frame = format!(
+                    "{{\"k\":\"chart\",\"src\":\"{src}\",\"tf\":{tf},\"full\":false,\"bars\":{}}}",
+                    serde_json::to_string(&tail).unwrap_or_default()
+                );
+                let _ = self.app.tx.send(frame);
+            }
+            FeedEvent::Died { error, .. } => {
+                if let Some((fid, h)) = self.chart_feeds.remove(&key) {
+                    self.active.remove(&fid);
+                    h.abort();
+                }
+                self.chart_cool.insert(key, now_f() + 10.0);
+                if let Ok(mut sh) = self.app.shared.write() {
+                    sh.chart_bars_ext.remove(&key);
+                }
+                eprintln!("[chart] feed {src} M{tf} gagal: {error}");
+            }
+            _ => {}
+        }
+    }
+
     fn stop_all(&mut self) {
         for (_, (_, h)) in self.tv.drain() {
             h.abort();
         }
+        for (_, (fid, h)) in self.chart_feeds.drain() {
+            h.abort();
+            self.active.remove(&fid);
+        }
+        self.chart_cool.clear();
         if let Some(c) = self.mt5.take() {
             c.handle.abort();
         }
@@ -277,6 +405,8 @@ impl Runner {
             sh.snap_frame = None;
             sh.tick = None;
             sh.meta = meta;
+            sh.chart_bars_ext.clear();
+            sh.chart_want.clear();
         }
         let _ = self.app.tx.send(frame);
     }
@@ -321,6 +451,11 @@ impl Runner {
     fn handle_event(&mut self, id: u64, ev: FeedEvent) {
         if !self.active.contains(&id) {
             return; // dari feed yang sudah dihentikan
+        }
+        // Event dari feed sumber alternatif (chart) -> jalur terpisah, tidak menyentuh engine utama
+        if let Some(&key) = self.chart_feeds.iter().find(|(_, (fid, _))| *fid == id).map(|(k, _)| k) {
+            self.handle_chart_event(key, ev);
+            return;
         }
         match ev {
             FeedEvent::History { tf, bars, point } => {

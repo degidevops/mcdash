@@ -19,6 +19,7 @@ import {
 import type { DrawingType, DrawingPoint, DrawingStyle } from './drawing.js';
 import { PanZoom } from './panzoom.js';
 import { ChartClient } from './client.js';
+import type { ChartSource, ChartSrcInfo } from './client.js';
 import { fmtPrice, fmtDate, fmtChg, fmtPct, decimalsOf, formatVol } from './util.js';
 
 export class ChartApp {
@@ -35,11 +36,12 @@ export class ChartApp {
   private pxEl!: HTMLElement;
   private chgEl!: HTMLElement;
   private btnFollowEl!: HTMLElement;
-  private btnTpoEl!: HTMLElement;
-  private btnNPocEl!: HTMLElement;
+  private btnTpoEl!: HTMLButtonElement;
+  private btnNPocEl!: HTMLButtonElement;
   private btnExportEl!: HTMLElement;
   private btnShortcutsEl!: HTMLElement;
   private shortcutsModalEl!: HTMLElement;
+  private srcSelEl: HTMLSelectElement | null = null;
   private btnCloseShortcutsEl!: HTMLElement;
   private chartMainEl!: HTMLElement;
   private btnClearDrawingsEl!: HTMLElement;
@@ -101,6 +103,9 @@ export class ChartApp {
   } | null = null;
 
   private tf = 60; // current timeframe in minutes
+  private source: ChartSource = 'main'; // sumber data aktif (main = sesuai config server)
+  private srcInfo: ChartSrcInfo | null = null;
+  private refetchSeq = 0; // pembatal refetch yang sedang berjalan bila ada permintaan lebih baru
   private tickSize = 0.01;
   private openPrice = 0;
   private dirty = true;
@@ -121,12 +126,13 @@ export class ChartApp {
     this.pxEl = document.getElementById('px')!;
     this.chgEl = document.getElementById('chg')!;
     this.btnFollowEl = document.getElementById('btnFollow')!;
-    this.btnTpoEl = document.getElementById('btnTpo')!;
-    this.btnNPocEl = document.getElementById('btnNPoc')!;
+    this.btnTpoEl = document.getElementById('btnTpo') as HTMLButtonElement;
+    this.btnNPocEl = document.getElementById('btnNPoc') as HTMLButtonElement;
     this.btnExportEl = document.getElementById('btnExport')!;
     this.btnShortcutsEl = document.getElementById('btnShortcuts')!;
     this.shortcutsModalEl = document.getElementById('shortcutsModal')!;
     this.btnCloseShortcutsEl = document.getElementById('btnCloseShortcuts')!;
+    this.srcSelEl = document.getElementById('srcSel') as HTMLSelectElement | null;
     this.chartMainEl = document.getElementById('chartMain')!;
     this.btnClearDrawingsEl = document.getElementById('btnClearDrawings')!;
     this.btnDeleteSelectedEl = document.getElementById('btnDeleteSelected') as HTMLButtonElement | null;
@@ -164,12 +170,37 @@ export class ChartApp {
     this.resize();
     window.addEventListener('resize', () => { this.resize(); this.markDirty(); });
 
+    // Dropdown sumber data (main / binance / tradingview)
+    if (this.srcSelEl) {
+      this.srcSelEl.addEventListener('change', () => {
+        this.switchSource((this.srcSelEl as HTMLSelectElement).value as ChartSource);
+      });
+    }
+
     // Client
     this.client = new ChartClient(
       (bars) => { this.bars.load(bars); this.fitAndRender(); },
-      (price) => { this.bars.updateLast(price); this.updatePrice(price); this.markDirty(); },
+      (price) => {
+        if (this.source !== 'main') return; // harga tick WS hanya berlaku utk sumber utama
+        this.bars.updateLast(price); this.updatePrice(price); this.markDirty();
+      },
       (connected) => { this.dotEl.className = connected ? 'ok' : ''; },
       (tpoData) => { this.tpo.setData(tpoData); this.markDirty(); },
+      (src, tf, full, frameBars) => {
+        // Frame live dari feed sumber alternatif
+        if (src !== this.source || tf !== this.tf) return;
+        if (full) {
+          const wasEmpty = this.bars.len === 0;
+          this.bars.load(frameBars);
+          if (this.openPrice === 0 && frameBars.length > 0) this.openPrice = frameBars[0].o;
+          if (wasEmpty) this.fitAndRender();
+        } else {
+          for (const b of frameBars) this.bars.upsert(b);
+          const lp = this.bars.lastPrice();
+          if (lp > 0) this.updatePrice(lp);
+        }
+        this.markDirty();
+      },
     );
 
     // PanZoom with X and Y axis drag & zoom support and double-click auto-fit
@@ -252,34 +283,97 @@ export class ChartApp {
     // Connect WebSocket for live ticks
     this.client.connect();
 
+    // Muat pilihan sumber data (restorasi pilihan terakhir via localStorage)
+    this.loadSourceOptions();
+
+    // Feed sumber alternatif tetap hidup: refresh permintaan tiap 4 menit
+    setInterval(() => {
+      if (this.source !== 'main') this.client.fetchBars(this.tf, 10).catch(() => {});
+    }, 4 * 60 * 1000);
+
     // Fetch initial data with auto-retry
-    const loadData = async (retry = 0) => {
-      this.statusEl.textContent = retry > 0 ? `Menunggu data dari Binance… (${retry})` : 'Memuat data…';
+    const loadData = async () => {
+      this.client.fetchTpo().then(tpo => this.tpo.setData(tpo)).catch(() => {});
+      await this.refetchBars();
+    };
+    await loadData();
+  }
+
+  // ------------------------------------------------------------ sumber data alternatif
+
+  /** Muat daftar sumber dari server; kembalikan pilihan tersimpan bila masih tersedia. */
+  private async loadSourceOptions(): Promise<void> {
+    const sel = this.srcSelEl;
+    if (!sel) return;
+    try {
+      const info = await this.client.fetchInfo();
+      this.srcInfo = info;
+      sel.innerHTML = '';
+      for (const opt of info.options) {
+        const o = document.createElement('option');
+        o.value = opt.id;
+        o.textContent = opt.label;
+        sel.appendChild(o);
+      }
+      let saved: string | null = null;
+      try { saved = localStorage.getItem('mcdash.chart.src'); } catch { /* ignore */ }
+      if (saved && saved !== 'main' && info.options.some(o => o.id === saved)) {
+        sel.value = saved;
+        this.switchSource(saved as ChartSource);
+      }
+    } catch { /* server belum siap; dropdown tetap default */ }
+  }
+
+  private srcLabel(src: ChartSource): string {
+    const opt = this.srcInfo?.options.find(o => o.id === src);
+    return opt?.label ?? (src === 'binance' ? 'Binance' : src === 'tv' ? 'TradingView' : 'Sumber utama');
+  }
+
+  private updateSourceUI(): void {
+    const ext = this.source !== 'main';
+    // TPO/nPOC dihitung dari sumber utama — tidak berlaku untuk sumber alternatif
+    if (this.btnTpoEl) this.btnTpoEl.disabled = ext;
+    if (this.btnNPocEl) this.btnNPocEl.disabled = ext;
+  }
+
+  private async switchSource(src: ChartSource): Promise<void> {
+    if (src === this.source) return;
+    this.source = src;
+    this.client.setSource(src);
+    if (this.srcSelEl) this.srcSelEl.value = src;
+    try { localStorage.setItem('mcdash.chart.src', src); } catch { /* ignore */ }
+    this.updateSourceUI();
+    await this.refetchBars();
+  }
+
+  /** Muat ulang bar utk (source, tf) aktif dengan retry — feed alternatif butuh waktu spawn. */
+  private async refetchBars(): Promise<void> {
+    const seq = ++this.refetchSeq;
+    const lbl = this.source === 'main' ? '' : this.srcLabel(this.source);
+    this.statusEl.textContent = lbl ? `Memuat data ${lbl}…` : 'Memuat data…';
+    for (let retry = 0; retry <= 30; retry++) {
       try {
-        const [bars, tpo] = await Promise.all([
-          this.client.fetchBars(this.tf),
-          this.client.fetchTpo().catch(() => null),
-        ]);
-        if (tpo) {
-          this.tpo.setData(tpo);
-        }
+        const bars = await this.client.fetchBars(this.tf);
+        if (seq !== this.refetchSeq) return;
         if (bars.length > 0) {
           this.bars.load(bars);
           this.openPrice = bars[0].o;
           this.tickSize = this.detectTickSize(bars);
           this.fitAndRender();
           this.statusEl.textContent = '';
-        } else if (retry < 30) {
-          setTimeout(() => loadData(retry + 1), 1000);
-        } else {
-          this.statusEl.textContent = 'Data belum siap, silakan ganti timeframe atau refresh.';
+          return;
+        }
+        if (retry === 30) {
+          this.statusEl.textContent = 'Data belum siap, silakan ganti timeframe / sumber atau refresh.';
+          return;
         }
       } catch (e) {
-        this.statusEl.textContent = `Gagal memuat: ${e}`;
-        if (retry < 15) setTimeout(() => loadData(retry + 1), 1500);
+        if (seq !== this.refetchSeq) return;
+        if (retry >= 15) { this.statusEl.textContent = `Gagal memuat: ${e}`; return; }
       }
-    };
-    await loadData();
+      await new Promise(r => setTimeout(r, 1000));
+      if (seq !== this.refetchSeq) return;
+    }
   }
 
   private bindKeyboard(): void {
@@ -324,6 +418,7 @@ export class ChartApp {
           break;
         case 'p':
         case 'P': {
+          if (this.source !== 'main') break; // TPO hanya utk sumber utama
           const mode = this.tpo.toggleProfile();
           if (this.btnTpoEl) {
             this.btnTpoEl.textContent = `📊 TPO: ${mode}`;
@@ -334,6 +429,7 @@ export class ChartApp {
         }
         case 'n':
         case 'N': {
+          if (this.source !== 'main') break; // nPOC hanya utk sumber utama
           const on = this.tpo.toggleNPOC();
           if (this.btnNPocEl) {
             this.btnNPocEl.classList.toggle('on', on);
@@ -960,19 +1056,7 @@ export class ChartApp {
     this.tf = tf;
     this.client.setTf(tf);
     if (this.sbTfEl) this.sbTfEl.textContent = this.tfLabel(tf);
-    this.statusEl.textContent = 'Memuat data…';
-    try {
-      const bars = await this.client.fetchBars(tf);
-      this.bars.load(bars);
-      if (bars.length > 0) {
-        this.openPrice = bars[0].o;
-        this.tickSize = this.detectTickSize(bars);
-      }
-      this.fitAndRender();
-      this.statusEl.textContent = '';
-    } catch (e) {
-      this.statusEl.textContent = `Gagal memuat: ${e}`;
-    }
+    await this.refetchBars();
   }
 
   private updatePrice(price: number): void {
@@ -1048,8 +1132,10 @@ export class ChartApp {
     // 4. Extrema High & Low Markers (ATAS style ▼ High / ▲ Low markers)
     this.drawExtremaMarkers(vp, bars);
 
-    // 5. Draw TPO overlay (blocks, level lines, separators, nPOC)
-    this.tpo.draw(this.ovCtx, vp, bars);
+    // 5. Draw TPO overlay (blocks, level lines, separators, nPOC) — hanya utk sumber utama
+    if (this.source === 'main') {
+      this.tpo.draw(this.ovCtx, vp, bars);
+    }
 
     // 6. Draw user drawings
     this.drawingRenderer.draw(this.ovCtx, vp, bars, this.drawingStore);

@@ -17,6 +17,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/chart", get(|s| file(s, "chart.html", "text/html; charset=utf-8")))
         .route("/chart/*path", get(chart_js))
         .route("/api/chart-bars", get(chart_bars))
+        .route("/api/chart-info", get(chart_info))
         .route("/api/chart-tpo", get(chart_tpo))
         .route("/:name", get(js_module))
         .route("/api/snapshot", get(api_snapshot))
@@ -79,6 +80,16 @@ async fn chart_js(State(app): State<Arc<App>>, axum::extract::Path(path): axum::
 struct ChartQuery {
     tf: Option<i64>,
     count: Option<usize>,
+    /// "main" (bawaan) | "binance" | "tv" — sumber alternatif untuk halaman /chart.
+    source: Option<String>,
+}
+
+fn pool_get<'a>(sh: &'a Shared, kind: u8, tf: i64) -> Option<&'a Bars> {
+    if kind == CHART_SRC_MAIN {
+        sh.chart_bars.get(&tf)
+    } else {
+        sh.chart_bars_ext.get(&(kind, tf))
+    }
 }
 
 /// Agregasi bar dari timeframe lebih kecil ke timeframe lebih besar (dalam detik).
@@ -101,22 +112,38 @@ pub fn aggregate_bars(base: &Bars, target_tf_sec: i64) -> Bars {
     out
 }
 
-/// GET /api/chart-bars?tf=60&count=500 → [[ts,o,h,l,c,v], ...]
+/// GET /api/chart-bars?tf=60&count=500&source=main|binance|tv → [[ts,o,h,l,c,v], ...]
+/// source=binance|tv: bar diambil dari feed alternatif yang dinyalakan on-demand;
+/// permintaan dicatat di chart_want agar runner tahu feed mana yang harus hidup.
 async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::extract::Query<ChartQuery>) -> Response {
     let tf = q.tf.unwrap_or(60);
     let count = q.count.unwrap_or(500);
+    let req = match q.source.as_deref() {
+        Some("binance") => CHART_SRC_BINANCE,
+        Some("tv") => CHART_SRC_TV,
+        _ => CHART_SRC_MAIN,
+    };
+    let kind = {
+        let sh = app.shared.read().unwrap();
+        let k = if req == primary_src_kind(&sh.meta.source) { CHART_SRC_MAIN } else { req };
+        if k != CHART_SRC_MAIN {
+            drop(sh);
+            if let Ok(mut sh) = app.shared.write() {
+                sh.chart_want.insert((k, tf), now_f());
+            }
+        }
+        k
+    };
     let sh = app.shared.read().unwrap();
-    let maybe_bars = sh.chart_bars.get(&tf).cloned();
-    let bars = match maybe_bars {
-        Some(b) if !b.is_empty() => b,
+    let bars = match pool_get(&sh, kind, tf) {
+        Some(b) if !b.is_empty() => b.clone(),
         _ => {
-            // Coba agregasi dari timeframe dasar lebih kecil yang ada
-            let base_candidate = [1, 5, 15, 60, 240]
+            // Coba agregasi dari timeframe dasar lebih kecil yang ada pada kolam sumber yang sama
+            let base_candidate = [1i64, 5, 15, 60, 240]
                 .into_iter()
-                .find(|&btf| btf < tf && sh.chart_bars.get(&btf).map_or(false, |b| !b.is_empty()));
+                .find(|&btf| btf < tf && pool_get(&sh, kind, btf).map_or(false, |b| !b.is_empty()));
             if let Some(btf) = base_candidate {
-                let base_bars = sh.chart_bars.get(&btf).unwrap();
-                aggregate_bars(base_bars, tf * 60)
+                aggregate_bars(pool_get(&sh, kind, btf).unwrap(), tf * 60)
             } else {
                 return json_resp(StatusCode::OK, "[]".into());
             }
@@ -127,6 +154,38 @@ async fn chart_bars(State(app): State<Arc<App>>, axum::extract::Query(q): axum::
     let skip = if total > count { total - count } else { 0 };
     let arr: Vec<[f64; 6]> = bars.iter().skip(skip).map(|(ts, b)| [*ts as f64, b.o, b.h, b.l, b.c, b.v]).collect();
     json_resp(StatusCode::OK, serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into()))
+}
+
+#[derive(serde::Serialize)]
+struct ChartSrcOption {
+    id: String,
+    label: String,
+}
+
+/// GET /api/chart-info → daftar pilihan sumber data untuk dropdown halaman /chart.
+async fn chart_info(State(app): State<Arc<App>>) -> Response {
+    let sh = app.shared.read().unwrap();
+    let primary = primary_src_kind(&sh.meta.source);
+    let sym = sh.snap.as_ref().map(|s| s.symbol.clone()).unwrap_or_else(|| sh.chart_tv_symbol.clone());
+    let main_label = if sh.meta.source == "tradingview" {
+        format!("TradingView · {sym}")
+    } else if sh.meta.source.is_empty() {
+        "Sumber utama".into()
+    } else {
+        sh.meta.source.clone()
+    };
+    let mut opts = vec![ChartSrcOption { id: "main".into(), label: main_label }];
+    if primary != CHART_SRC_BINANCE && !sym.is_empty() {
+        opts.push(ChartSrcOption { id: "binance".into(), label: format!("Binance · {}", crate::app::chart_binance_symbol(&sym)) });
+    }
+    if primary != CHART_SRC_TV {
+        let tv_sym = if sh.chart_tv_symbol.is_empty() { sym.clone() } else { sh.chart_tv_symbol.clone() };
+        if !tv_sym.is_empty() {
+            opts.push(ChartSrcOption { id: "tv".into(), label: format!("TradingView · {tv_sym}") });
+        }
+    }
+    let body = serde_json::json!({ "primary": sh.meta.source, "options": opts });
+    json_resp(StatusCode::OK, body.to_string())
 }
 
 #[derive(serde::Deserialize)]
