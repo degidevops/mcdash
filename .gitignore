@@ -4,3 +4,5 @@ telegram.json
 snapshot.json
 *.tmp
 *.tar.gz
+__pycache__/
+*.pyc
