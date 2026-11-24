@@ -1,8 +1,13 @@
-//! Feed Binance (data publik, tanpa API key): riwayat lewat REST `klines`, live lewat WebSocket `<symbol>@kline_<interval>`.
+//! Feed Binance (data publik, tanpa API key): riwayat lewat REST `klines`, live lewat WebSocket.
 //!
 //! Satu feed = satu timeframe (sama seperti feed TradingView), jadi runner memperlakukannya persis sama.
 //! Urutan tiap sesi: sambung WebSocket dulu → baru ambil riwayat/backfill lewat REST. Dengan begitu tidak ada
 //! bar yang terlewat di antara keduanya, dan setelah koneksi putus bar yang terlewat diisi ulang dari bar terakhir.
+//!
+//! realtime: SATU koneksi combined stream memuat `@kline_<interval>` (untuk bar) DAN `@aggTrade`
+//! (futures) / `@trade` (spot) — harga bergerak per TRADE, bukan menunggu update kline (1–2 dtk).
+//! Klien juga mengirim ping WS berkala; koneksi zombie (TCP hidup tapi tidak mengirim apa pun)
+//! terdeteksi dalam ~75 dtk, bukan 240 dtk.
 //!
 //! Simbol cukup ditulis `XAUUSDT` (juga diterima: `BINANCE:XAUUSDT.P`, `xau/usdt`).
 //! XAUUSDT/XAGUSDT adalah perpetual futures USDⓈ-M, jadi `binance_market` bawaannya `futures`.
@@ -13,13 +18,18 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
+use tokio::time::{sleep, timeout, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::Message;
 
 /// Bar per permintaan REST (batas Binance: 1000 spot, 1500 futures; 1000 aman untuk keduanya).
 const PAGE: usize = 1000;
-/// Server futures mengirim ping tiap 3 menit, spot tiap 20 detik; tanpa data apa pun selama ini = koneksi mati.
-const IDLE_SECS: u64 = 240;
+/// Batas tanpa pesan APA PUN (data / pong / ping server) = koneksi mati. Klien mengirim ping WS
+/// tiap PING_SECS dan server wajib menjawab pong (RFC 6455), jadi 75 dtk tanpa pesan apa pun
+/// berarti koneksi zombie — pulih dalam ~75 dtk, bukan 240 dtk seperti sebelumnya.
+const IDLE_SECS: u64 = 75;
+/// Klien mengirim ping protokol WS tiap 25 dtk agar liveness tidak bergantung pada arus data
+/// (pasar sepi / simbol tidak likuid bisa saja beberapa lama tanpa trade).
+const PING_SECS: u64 = 25;
 /// Batas halaman saat backfill setelah putus (mencegah loop tak berujung).
 const MAX_BACKFILL_PAGES: usize = 60;
 
@@ -58,6 +68,19 @@ impl Market {
             }
             .to_string()
         })
+    }
+    /// URL combined stream: beberapa stream dalam SATU koneksi (`.../stream?streams=a/b`).
+    fn ws_combined(self, streams: &str) -> String {
+        let base = self.ws_base();
+        let root = base.strip_suffix("/ws").unwrap_or(&base);
+        format!("{root}/stream?streams={streams}")
+    }
+    /// Stream harga trade realtime: aggTrade di futures, trade di spot.
+    fn trade_stream(self) -> &'static str {
+        match self {
+            Market::Futures => "aggTrade",
+            Market::Spot => "trade",
+        }
     }
     fn klines_path(self) -> &'static str {
         match self {
@@ -129,6 +152,18 @@ pub fn parse_ws_kline(raw: &str) -> Option<(i64, Bar)> {
     let k = v.get("k")?;
     let bar = Bar { o: as_f(k.get("o")?)?, h: as_f(k.get("h")?)?, l: as_f(k.get("l")?)?, c: as_f(k.get("c")?)?, v: as_f(k.get("v")?)? };
     Some((k.get("t")?.as_i64()? / 1000, bar))
+}
+
+/// Pesan aggTrade (futures) / trade (spot) -> harga trade terakhir. Ini jalur harga realtime:
+/// bergerak per TRADE, tidak menunggu update kline yang dikirim 1–2 detik sekali.
+pub fn parse_ws_trade(raw: &str) -> Option<f64> {
+    let v: Value = serde_json::from_str(raw).ok()?;
+    let v = v.get("data").unwrap_or(&v);
+    let e = v.get("e")?.as_str()?;
+    if e != "aggTrade" && e != "trade" {
+        return None;
+    }
+    as_f(v.get("p")?)
 }
 
 /// tickSize filter PRICE_FILTER simbol; Err bila simbol tidak ada di daftar, Ok(None) bila ada tapi tanpa tickSize.
@@ -319,8 +354,11 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, Fail> + Send 
 }
 
 async fn session(st: &mut State) -> Result<(), Fail> {
-    // 1) WebSocket dulu: pesan yang datang selama REST berjalan antre di socket dan diproses sesudahnya (tanpa celah)
-    let url = format!("{}/{}@kline_{}", st.market.ws_base(), st.symbol.to_lowercase(), st.iv);
+    // 1) WebSocket dulu: pesan yang datang selama REST berjalan antre di socket dan diproses sesudahnya (tanpa celah).
+    //    Combined stream: kline (untuk bar) + aggTrade/trade (harga realtime per trade) dalam satu koneksi.
+    let sl = st.symbol.to_lowercase();
+    let streams = format!("{sl}@kline_{iv}/{sl}@{tr}", sl = sl, iv = st.iv, tr = st.market.trade_stream());
+    let url = st.market.ws_combined(&streams);
     let (mut ws, _) = timeout(Duration::from_secs(20), tokio_tungstenite::connect_async(url))
         .await
         .map_err(|_| Fail::Transient("timeout menyambung".into()))?
@@ -362,24 +400,39 @@ async fn session(st: &mut State) -> Result<(), Fail> {
         }
     }
 
-    // 3) live
+    // 3) live — dengan ping klien berkala: koneksi zombie (tidak mengirim apa pun) terdeteksi ~IDLE_SECS
+    let mut pinger = tokio::time::interval(Duration::from_secs(PING_SECS));
+    pinger.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        let msg = timeout(Duration::from_secs(IDLE_SECS), ws.next())
-            .await
-            .map_err(|_| Fail::Transient(format!("timeout {IDLE_SECS} dtk tanpa data")))?
-            .ok_or_else(|| Fail::Transient("koneksi ditutup".into()))?
-            .map_err(|e| Fail::Transient(e.to_string()))?;
-        match msg {
-            Message::Text(t) => {
-                if let Some((ts, bar)) = parse_ws_kline(&t) {
-                    st.got_data = true;
-                    st.bars.insert(ts, bar);
-                    let _ = st.tx.send((st.id, FeedEvent::Live { tf: st.tf, bars: vec![(ts, bar)] }));
+        tokio::select! {
+            _ = pinger.tick() => {
+                // ping protokol WS: server wajib menjawab pong -> pesan tetap mengalir walau pasar sepi
+                if ws.send(Message::Ping(Vec::new())).await.is_err() {
+                    return Err(Fail::Transient("gagal mengirim ping".into()));
                 }
             }
-            Message::Ping(p) => ws.send(Message::Pong(p)).await.map_err(|e| Fail::Transient(e.to_string()))?,
-            Message::Close(_) => return Err(Fail::Transient("koneksi ditutup".into())),
-            _ => {}
+            msg = timeout(Duration::from_secs(IDLE_SECS), ws.next()) => {
+                let msg = msg
+                    .map_err(|_| Fail::Transient(format!("timeout {IDLE_SECS} dtk tanpa data/pong")))?
+                    .ok_or_else(|| Fail::Transient("koneksi ditutup".into()))?
+                    .map_err(|e| Fail::Transient(e.to_string()))?;
+                match msg {
+                    Message::Text(t) => {
+                        if let Some((ts, bar)) = parse_ws_kline(&t) {
+                            st.got_data = true;
+                            st.bars.insert(ts, bar);
+                            let _ = st.tx.send((st.id, FeedEvent::Live { tf: st.tf, bars: vec![(ts, bar)] }));
+                        } else if let Some(px) = parse_ws_trade(&t) {
+                            // jalur cepat harga: per trade, tanpa menunggu bar
+                            st.got_data = true;
+                            let _ = st.tx.send((st.id, FeedEvent::Price { price: px }));
+                        }
+                    }
+                    Message::Ping(p) => ws.send(Message::Pong(p)).await.map_err(|e| Fail::Transient(e.to_string()))?,
+                    Message::Close(_) => return Err(Fail::Transient("koneksi ditutup".into())),
+                    _ => {}
+                }
+            }
         }
     }
 }
@@ -430,6 +483,35 @@ mod tests {
         assert_eq!(parse_ws_kline(&wrapped).unwrap().0, 1700000000);
         // pesan non-kline diabaikan
         assert!(parse_ws_kline(r#"{"result":null,"id":1}"#).is_none());
+    }
+
+    #[test]
+    fn parse_trade_websocket() {
+        // futures aggTrade (bentuk mentah)
+        let agg = r#"{"e":"aggTrade","E":1700000001000,"s":"XAUUSDT","a":123,"p":"4001.25","q":"0.5","f":1,"l":2,"T":1700000001000,"m":false}"#;
+        assert_eq!(parse_ws_trade(agg), Some(4001.25));
+        // spot trade (bentuk combined stream)
+        let tr = r#"{"e":"trade","E":1700000002000,"s":"XAUUSDT","t":1,"p":"4001.30","q":"0.1","m":true}"#;
+        let wrapped = format!(r#"{{"stream":"xauusdt@trade","data":{tr}}}"#);
+        assert_eq!(parse_ws_trade(&wrapped), Some(4001.30));
+        // pesan lain (kline / respons) bukan harga trade
+        assert!(parse_ws_trade(r#"{"e":"kline","E":1,"s":"XAUUSDT","k":{"t":1,"o":"1","c":"1","h":"1","l":"1","v":"1"}}"#).is_none());
+        assert!(parse_ws_trade(r#"{"result":null,"id":1}"#).is_none());
+    }
+
+    #[test]
+    fn url_combined_stream() {
+        let m = Market::Futures;
+        let base = std::env::var("MCDASH_BINANCE_WS").unwrap_or_default();
+        std::env::remove_var("MCDASH_BINANCE_WS");
+        let url = m.ws_combined("xauusdt@kline_1m/xauusdt@aggTrade");
+        assert_eq!(url, "wss://fstream.binance.com/market/stream?streams=xauusdt@kline_1m/xauusdt@aggTrade");
+        let spot = Market::Spot.ws_combined("btcusdt@kline_1m/btcusdt@trade");
+        assert_eq!(spot, "wss://stream.binance.com:9443/stream?streams=btcusdt@kline_1m/btcusdt@trade");
+        // kembalikan env bila sebelumnya diatur (pengujian dengan mock)
+        if !base.is_empty() {
+            std::env::set_var("MCDASH_BINANCE_WS", base);
+        }
     }
 
     #[test]

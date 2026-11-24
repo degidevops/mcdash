@@ -12,7 +12,14 @@ use tokio_tungstenite::tungstenite::Message;
 const WS_URL: &str = "wss://data.tradingview.com/socket.io/websocket";
 const ORIGIN: &str = "https://www.tradingview.com";
 const CHUNK: i64 = 5000; // bar per permintaan (batas umum akun anonim)
+/// TV mengirim heartbeat `~h~` tiap beberapa detik walau pasar tutup; tanpa pesan APA PUN selama
+/// 45 dtk = koneksi mati/zombie. Sebelumnya 60 dtk -> data bisa basi sampai semenit sebelum pulih.
+const IDLE_SECS: u64 = 45;
 const FATAL: [&str; 4] = ["critical_error", "protocol_error", "symbol_error", "series_error"];
+
+fn now_f() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
 
 fn rand_id(prefix: &str) -> String {
     let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(88172645463325252) | 1;
@@ -58,6 +65,8 @@ struct State {
     got_data: bool,
     point: Option<f64>,
     cs: String,
+    /// Epoch detik saat sesi terakhir berakhir; dipakai untuk mengukur celah data saat reconnect.
+    down_at: f64,
 }
 
 enum Fail {
@@ -66,7 +75,7 @@ enum Fail {
 }
 
 pub async fn run(id: u64, symbol: String, tf: i64, target: i64, tx: Tx) {
-    let mut st = State { id, symbol, tf, target, tx, bars: Bars::new(), history_done: false, count_before: 0, got_data: false, point: None, cs: String::new() };
+    let mut st = State { id, symbol, tf, target, tx, bars: Bars::new(), history_done: false, count_before: 0, got_data: false, point: None, cs: String::new(), down_at: 0.0 };
     let mut backoff = 1u64;
     loop {
         match session(&mut st).await {
@@ -77,6 +86,7 @@ pub async fn run(id: u64, symbol: String, tf: i64, target: i64, tx: Tx) {
             Err(Fail::Transient(e)) => eprintln!("[feed M{}] terputus ({e}), reconnect {backoff}s", st.tf),
             Ok(()) => {}
         }
+        st.down_at = now_f(); // catat kapan data berhenti mengalir -> jendela catch-up saat reconnect
         if st.got_data {
             backoff = 1;
             st.got_data = false;
@@ -101,7 +111,16 @@ async fn session(st: &mut State) -> Result<(), Fail> {
     st.cs = rand_id("cs_");
     let cs = st.cs.clone();
     let send = |m: &str, p: Value| Message::Text(frame(m, p));
-    let first = if st.history_done { st.target } else { st.target.min(CHUNK) };
+    // Riwayat yang sudah ada tetap di st.bars. Setelah reconnect, cukup minta jendela bar seluas
+    // selisih waktu putus (+margin) — reconnect jadi cepat (beberapa bar) dan tidak mengunduh ulang
+    // seluruh riwayat. Celah lebih panjang dari target bar kembali meminta penuh seperti perilaku lama.
+    let first = if st.history_done {
+        let gap = (now_f() - st.down_at).max(0.0);
+        let need = (gap / (st.tf as f64 * 60.0)).ceil() as i64 + 10;
+        st.target.min(need.max(10))
+    } else {
+        st.target.min(CHUNK)
+    };
     let sym = format!("={{\"symbol\": {}, \"adjustment\": \"splits\"}}", serde_json::to_string(&st.symbol).unwrap());
     for m in [
         send("set_auth_token", json!(["unauthorized_user_token"])),
@@ -113,9 +132,9 @@ async fn session(st: &mut State) -> Result<(), Fail> {
         ws.send(m).await.map_err(|e| Fail::Transient(e.to_string()))?;
     }
     loop {
-        let msg = timeout(Duration::from_secs(60), ws.next())
+        let msg = timeout(Duration::from_secs(IDLE_SECS), ws.next())
             .await
-            .map_err(|_| Fail::Transient("timeout 60 dtk tanpa data".into()))?
+            .map_err(|_| Fail::Transient(format!("timeout {IDLE_SECS} dtk tanpa data")))?
             .ok_or_else(|| Fail::Transient("koneksi ditutup".into()))?
             .map_err(|e| Fail::Transient(e.to_string()))?;
         let raw = match msg {
