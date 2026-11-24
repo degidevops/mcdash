@@ -54,6 +54,12 @@ Level periode yang sudah selesai dianggap **tersentuh** hanya bila harga memuat 
 "source": { "type": "binance", "binance_market": "futures" }       // simbol dari general.symbol
 ```
 
+### Realtime & pemulihan koneksi (anti-delay)
+- **Binance**: satu koneksi combined stream memuat `@kline_<interval>` (bar) DAN `@aggTrade`/`@trade` — harga bergerak per **trade**, bukan menunggu update kline (1–2 dtk). Klien mengirim ping WS tiap 25 dtk; tanpa pesan/pong 75 dtk koneksi dianggap mati dan diisi ulang otomatis (sebelumnya 240 dtk).
+- **TradingView**: koneksi tanpa pesan apa pun 45 dtk dianggap mati (sebelumnya 60 dtk). Setelah reconnect feed hanya mengunduh jendela bar seluas selisih waktu putus (+margin), bukan seluruh riwayat — data kembali mengalir dalam ~1 dtk, bukan berputar mengunduh ribuan bar.
+- **MT5**: riwayat dikirim EA satu potongan per tick timer (v1.10), jadi kiriman live tidak terblokir selama riwayat panjang ditransfer — perbarui `MCDashBridge.mq5` di terminal agar manfaatnya penuh.
+- **TPO snapshot**: jeda minimum antar perhitungan bawaan 0,5 dtk (`--interval`, sebelumnya 1 dtk); di perangkat lambat mesin tetap menyesuaikan otomatis (4× durasi perhitungan).
+
 ### Binance
 Data publik, tanpa API key. Cukup isi `source.type` dan simbolnya:
 
@@ -63,7 +69,7 @@ Data publik, tanpa API key. Cukup isi `source.type` dan simbolnya:
 atau tanpa mengubah file: `mcdash --symbol XAUUSDT` (bila `source.type` sudah `binance`).
 - `binance_market`: `"futures"` (bawaan, USDⓈ-M perpetual) atau `"spot"`. **XAUUSDT/XAGUSDT hanya ada di futures.** Kripto biasa (BTCUSDT dll.) ada di keduanya.
 - Penulisan simbol bebas: `XAUUSDT`, `xauusdt`, `BINANCE:XAUUSDT.P`, `xau/usdt`.
-- Riwayat lewat REST `klines` (mundur per 1000 bar sampai `history_bars`), live lewat WebSocket `@kline_<interval>`; setelah koneksi putus bar yang terlewat diisi ulang otomatis. Point diambil dari `tickSize` (XAUUSDT = 0.01).
+- Riwayat lewat REST `klines` (mundur per 1000 bar sampai `history_bars`), live lewat WebSocket combined stream `@kline_<interval>` + `@aggTrade`/`@trade` (harga bergerak per trade); setelah koneksi putus bar yang terlewat diisi ulang otomatis. Point diambil dari `tickSize` (XAUUSDT = 0.01).
 - Waktu bar Binance sudah UTC, jadi tidak ada deteksi zona waktu server. Pasar ini 24/7 (tanpa jeda akhir pekan), sama seperti kripto.
 - Timeframe feed yang didukung: 1, 3, 5, 15, 30, 60 menit (dan 120/240/360/480/720/1440 bila `feed_tf` dipaksa).
 - Bila Binance menolak IP/lokasi server (HTTP 451/403), dashboard menampilkan pesannya; pakai server di wilayah lain atau proxy. Alamat bisa dialihkan lewat env `MCDASH_BINANCE_REST` / `MCDASH_BINANCE_WS`.

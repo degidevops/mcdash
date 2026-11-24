@@ -15,9 +15,14 @@
 //|  Protokol: satu JSON per baris lewat TCP ("MCB1"), waktu bar     |
 //|  dalam epoch UTC menurut offset server SAAT INI, plus field      |
 //|  "off" (detik) agar server mengonversi ulang per bar (DST).      |
+//|                                                                  |
+//|  v1.10: riwayat dikirim SATU POTONGAN per tick timer (antrean    |
+//|  pekerjaan), sehingga kiriman live tidak lagi terblokir selama   |
+//|  riwayat panjang ditransfer — penyebab data "delay" pada         |
+//|  startup/restart/konfigurasi baru.                               |
 //+------------------------------------------------------------------+
 #property copyright "mcdash"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 input string InpHost    = "127.0.0.1"; // alamat server mcdash
@@ -33,6 +38,15 @@ uint     g_lastLive  = 0;
 uint     g_lastHb    = 0;
 datetime g_nextTry   = 0;
 bool     g_ready     = false;          // hello sudah terkirim
+
+// --- antrean riwayat: tiap tick timer mengirim maksimal satu potongan, live tetap mengalir
+int      g_qTf[32];                    // timeframe yang menunggu pengiriman riwayat
+int      g_qCnt[32];                   // jumlah bar yang diminta server
+int      g_qN        = 0;              // panjang antrean
+int      g_jobTf     = 0;              // timeframe pekerjaan berjalan (0 = tidak ada)
+MqlRates g_jobRates[];                 // snapshot bar untuk pekerjaan berjalan
+int      g_jobGot    = 0;              // jumlah bar terambil
+int      g_jobSent   = 0;              // bar yang sudah terkirim
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -60,6 +74,11 @@ void CloseSock()
    g_ready = false;
    g_rx    = "";
    ArrayResize(g_tfs, 0);
+   g_qN      = 0;
+   g_jobTf   = 0;
+   g_jobGot  = 0;
+   g_jobSent = 0;
+   ArrayResize(g_jobRates, 0);
   }
 
 //--- offset waktu server broker terhadap UTC (detik), dibulatkan ke 15 menit agar tidak bergetar
@@ -117,8 +136,8 @@ string BarJson(const MqlRates &r, const long off)
           IntegerToString((long)r.tick_volume) + "]";
   }
 
-//--- kirim riwayat satu timeframe (terlama -> terbaru) dalam beberapa potongan
-void SendHistory(const int tfMin, const int count)
+//--- mulai pekerjaan riwayat: ambil snapshot bar sekali, potongan dikirim bertahap oleh JobStep()
+void JobStart(const int tfMin, const int count)
   {
    ENUM_TIMEFRAMES tf = TfFromMinutes(tfMin);
    if(tf == PERIOD_CURRENT)
@@ -127,12 +146,11 @@ void SendHistory(const int tfMin, const int count)
       SendLine("{\"t\":\"bars\",\"tf\":" + IntegerToString(tfMin) + ",\"b\":[],\"last\":true}");
       return;
      }
-   MqlRates rates[];
-   ArraySetAsSeries(rates, false);
+   ArraySetAsSeries(g_jobRates, false);
    int got = -1;
    for(int attempt = 0; attempt < 5 && got <= 0; attempt++)
      {
-      got = CopyRates(_Symbol, tf, 0, count, rates);
+      got = CopyRates(_Symbol, tf, 0, count, g_jobRates);
       if(got <= 0)
          Sleep(200); // data riwayat mungkin belum termuat
      }
@@ -141,22 +159,56 @@ void SendHistory(const int tfMin, const int count)
       SendLine("{\"t\":\"bars\",\"tf\":" + IntegerToString(tfMin) + ",\"b\":[],\"last\":true}");
       return;
      }
-   long off = ServerOffset();
-   for(int i = 0; i < got; i += InpChunk)
+   g_jobTf    = tfMin;
+   g_jobGot   = got;
+   g_jobSent  = 0;
+  }
+
+//--- kirim satu potongan riwayat per pemanggilan; panggil tiap tick timer agar live tidak terblokir
+void JobStep()
+  {
+   if(g_jobTf == 0)
      {
-      int    end = MathMin(i + InpChunk, got);
-      string s   = "{\"t\":\"bars\",\"tf\":" + IntegerToString(tfMin) + ",\"off\":" + IntegerToString(off) + ",\"b\":[";
-      for(int k = i; k < end; k++)
+      if(g_qN > 0) // mulai pekerjaan berikutnya dari antrean
         {
-         if(k > i)
-            s += ",";
-         s += BarJson(rates[k], off);
+         int tf = g_qTf[0], cnt = g_qCnt[0];
+         g_qN--;
+         for(int i = 0; i < g_qN; i++)
+           {
+            g_qTf[i]  = g_qTf[i + 1];
+            g_qCnt[i] = g_qCnt[i + 1];
+           }
+         JobStart(tf, cnt);
         }
-      s += "],\"last\":" + (end >= got ? "true" : "false") + "}";
-      if(!SendLine(s))
-         return;
+      return;
      }
-   Print("MCDashBridge: riwayat M", tfMin, " terkirim (", got, " bar)");
+   if(g_jobSent >= g_jobGot)
+     {
+      g_jobTf = 0;
+      return;
+     }
+   long off = ServerOffset();
+   int  end = MathMin(g_jobSent + InpChunk, g_jobGot);
+   string s = "{\"t\":\"bars\",\"tf\":" + IntegerToString(g_jobTf) + ",\"off\":" + IntegerToString(off) + ",\"b\":[";
+   for(int k = g_jobSent; k < end; k++)
+     {
+      if(k > g_jobSent)
+         s += ",";
+      s += BarJson(g_jobRates[k], off);
+     }
+   s += "],\"last\":" + (end >= g_jobGot ? "true" : "false") + "}";
+   if(SendLine(s))
+      g_jobSent = end;
+   else
+     {
+      g_jobTf = 0; // kirim gagal; koneksi dipulihkan dan server mengirim "need" lagi
+      return;
+     }
+   if(g_jobSent >= g_jobGot)
+     {
+      Print("MCDashBridge: riwayat M", g_jobTf, " terkirim (", g_jobGot, " bar)");
+      g_jobTf = 0;
+     }
   }
 
 //--- kirim harga bid + bar berjalan (dan bar sebelumnya) untuk tiap timeframe yang diminta
@@ -228,7 +280,19 @@ void HandleLine(const string line)
             ArrayResize(g_tfs, ArraySize(g_tfs) + 1);
             g_tfs[ArraySize(g_tfs) - 1] = tf;
            }
-         SendHistory(tf, count);
+         bool queued = (g_jobTf == tf);
+         for(int i = 0; i < g_qN && !queued; i++)
+            if(g_qTf[i] == tf)
+              {
+               g_qCnt[i] = count; // jumlah baru menimpa yang lama
+               queued = true;
+              }
+         if(!queued && g_qN < 32)
+           {
+            g_qTf[g_qN]  = tf;
+            g_qCnt[g_qN] = count;
+            g_qN++;
+           }
         }
      }
    else
@@ -312,6 +376,9 @@ void OnTimer()
       return;
      }
    Pump();
+   if(g_sock == INVALID_HANDLE)
+      return;
+   JobStep(); // maksimal satu potongan riwayat per tick — live tidak ikut menunggu
    if(g_sock == INVALID_HANDLE)
       return;
    uint now = GetTickCount();
