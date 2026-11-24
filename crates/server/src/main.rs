@@ -20,7 +20,7 @@ const HELP: &str = "mcdash — dashboard TPO (Rust + TS)
     --telegram <file>   default: telegram.json di folder yang sama dengan config
     --symbol <S>        timpa general.symbol (TradingView: OANDA:XAUUSD, Binance: XAUUSDT)
     --point <p>         timpa ukuran point
-    --interval <detik>  jeda minimum antar perhitungan TPO (default 1.0)
+    --interval <detik>  jeda minimum antar perhitungan TPO (default 0.5)
     --text              cetak laporan teks tiap perhitungan
     --once              hitung sekali, cetak laporan teks, lalu keluar (tanpa web)
     --dump <profil>     cetak isi satu profil per baris (mis. S-1, D-now, W-1; angka = periode selesai ke-N dari belakang), lalu keluar
@@ -43,7 +43,7 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut a = Args { config: "config.json".into(), host: "0.0.0.0".into(), port: 9898, web: None, telegram: None, symbol: None, point: 0.0, interval: 1.0, text: false, once: false, init: false, dump: None };
+    let mut a = Args { config: "config.json".into(), host: "0.0.0.0".into(), port: 9898, web: None, telegram: None, symbol: None, point: 0.0, interval: 0.5, text: false, once: false, init: false, dump: None };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
         let mut val = |name: &str| it.next().ok_or(format!("{name} butuh nilai"));

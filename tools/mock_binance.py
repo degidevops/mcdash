@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Server Binance tiruan (REST klines/exchangeInfo + WebSocket kline) untuk menguji feed tanpa internet.
+"""Server Binance tiruan (REST klines/exchangeInfo + WebSocket kline & trade) untuk menguji feed tanpa internet.
    python3 tools/mock_binance.py --rest-port 18780 --ws-port 18781 [--symbol XAUUSDT] [--drop-once]
    Jalankan mcdash dengan MCDASH_BINANCE_REST=http://127.0.0.1:18780 MCDASH_BINANCE_WS=ws://127.0.0.1:18781
    --drop-once menutup koneksi WebSocket pertama tiap interval (menguji reconnect + backfill)."""
@@ -52,12 +52,24 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, [row(t, b[t]) for t in sel])
         self.send(404, {"code": -1, "msg": "?"})
 
+def ws_streams(path):
+    """Nama stream dari URL WS: raw `xauusdt@kline_1m` atau combined `/stream?streams=a/b`."""
+    p = path.lstrip("/")
+    if p.startswith("stream"):
+        q = p.split("?", 1)[1] if "?" in p else ""
+        return [s for s in parse_qs(q).get("streams", [""])[0].split("/") if s]
+    return [p]
+
 async def ws_handler(ws):
-    path = ws.request.path.lstrip("/"); sym, _, iv = path.partition("@kline_")
-    if sym.upper() != A.symbol or iv not in IV:
+    kl = None
+    for s in ws_streams(ws.request.path):
+        sym, _, iv = s.partition("@kline_")
+        if sym.upper() == A.symbol and iv in IV:
+            kl = iv
+    if kl is None:
         await ws.close(); return
-    first = iv not in A.dropped
-    k = IV[iv]; step = k * 60
+    first = kl not in A.dropped
+    k = IV[kl]; step = k * 60
     try:
         n = 0
         while True:
@@ -70,8 +82,11 @@ async def ws_handler(ws):
             msg = {"e": "kline", "E": now * 1000, "s": A.symbol, "k": {"t": t * 1000, "T": t * 1000 + step * 1000 - 1, "s": A.symbol, "i": iv,
                    "o": f"{o:.2f}", "c": f"{c:.2f}", "h": f"{max(o, c):.2f}", "l": f"{min(o, c):.2f}", "v": "5.0", "x": False}}
             await ws.send(json.dumps(msg))
+            # pesan harga per trade (aggTrade) — menguji jalur harga realtime
+            trade = {"e": "aggTrade", "E": now * 1000, "s": A.symbol, "p": f"{c + random.uniform(-0.05, 0.05):.2f}", "q": "1.0"}
+            await ws.send(json.dumps(trade))
             if A.drop_once and first and n == 5:
-                A.dropped.add(iv); print("drop", iv, flush=True); await ws.close(); return
+                A.dropped.add(kl); print("drop", kl, flush=True); await ws.close(); return
     except websockets.ConnectionClosed:
         pass
 
