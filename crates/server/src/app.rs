@@ -84,7 +84,8 @@ pub struct App {
     pub shared: RwLock<Shared>,
     pub tx: broadcast::Sender<String>,
     pub cfg_path: String,
-    pub web_dir: PathBuf,
+    /// None = pakai klien web yang tertanam di biner (rust-embed); Some = baca dari folder itu (--web / MCDASH_WEB).
+    pub web_dir: Option<PathBuf>,
     pub notifier: Notifier,
 }
 

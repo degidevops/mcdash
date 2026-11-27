@@ -19,6 +19,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/chart-bars", get(chart_bars))
         .route("/api/chart-info", get(chart_info))
         .route("/api/chart-tpo", get(chart_tpo))
+        .route("/mt5/MCDashBridge.mq5", get(mt5_ea))
         .route("/:name", get(js_module))
         .route("/api/snapshot", get(api_snapshot))
         .route("/api/config", get(get_config).post(post_config))
@@ -37,18 +38,46 @@ fn detail(code: StatusCode, msg: &str) -> Response {
     json_resp(code, serde_json::json!({ "detail": msg }).to_string())
 }
 
+/// Klien web (web/dist) yang ditanam ke dalam biner saat build release. Di build debug, rust-embed
+/// membaca langsung dari disk, jadi hasil `npm run build` langsung terlihat tanpa compile ulang Rust.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../web/dist/"]
+struct Assets;
+
+/// Expert Advisor MT5, ikut tertanam supaya bisa diunduh dari server: http://<host>:9898/mt5/MCDashBridge.mq5
+const MT5_EA: &str = include_str!("../../../mt5/MCDashBridge.mq5");
+
+async fn mt5_ea() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"MCDashBridge.mq5\""),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        MT5_EA,
+    )
+        .into_response()
+}
+
 async fn file(State(app): State<Arc<App>>, name: &str, ctype: &'static str) -> Response {
-    match tokio::fs::read(app.web_dir.join(name)).await {
-        Ok(b) => ([(header::CONTENT_TYPE, ctype), (header::CACHE_CONTROL, "no-store")], b).into_response(),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            format!("{name} tidak ditemukan di {}. Bangun klien dulu: cd web && npm install && npm run build", app.web_dir.display()),
-        )
-            .into_response(),
+    let hdr = [(header::CONTENT_TYPE, ctype), (header::CACHE_CONTROL, "no-store")];
+    if let Some(dir) = &app.web_dir {
+        return match tokio::fs::read(dir.join(name)).await {
+            Ok(b) => (hdr, b).into_response(),
+            Err(_) => (
+                StatusCode::NOT_FOUND,
+                format!("{name} tidak ditemukan di {}. Bangun klien dulu: cd web && npm install && npm run build", dir.display()),
+            )
+                .into_response(),
+        };
+    }
+    match Assets::get(name) {
+        Some(f) => (hdr, f.data.into_owned()).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-/// Modul hasil compile tsc/tsrs (dist/*.js). Nama dibatasi ke `[a-z0-9_-]+.js` agar tidak bisa keluar dari web_dir.
+/// Modul hasil compile tsc/tsrs (dist/*.js). Nama dibatasi ke `[a-z0-9_-]+.js` agar tidak bisa keluar dari web_dir (atau dari aset tertanam).
 async fn js_module(State(app): State<Arc<App>>, axum::extract::Path(name): axum::extract::Path<String>) -> Response {
     let ok = name.strip_suffix(".js").map_or(false, |b| !b.is_empty() && b.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-'));
     if !ok {
@@ -342,10 +371,18 @@ mod tests {
             shared: std::sync::RwLock::new(Shared::default()),
             tx,
             cfg_path: "config.json".into(),
-            web_dir: PathBuf::from("web/dist"),
+            web_dir: None,
             notifier: crate::notifier::Notifier::new(PathBuf::from("telegram.json")),
         });
         let _ = router(app);
+    }
+
+    #[test]
+    fn klien_web_tertanam_di_biner() {
+        for f in ["index.html", "chart.html", "client.js", "chart/app.js"] {
+            assert!(Assets::get(f).is_some(), "{f} tidak ada di aset tertanam; jalankan dulu: cd web && npm run build");
+        }
+        assert!(MT5_EA.contains("MCDash"));
     }
 
     #[test]

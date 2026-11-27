@@ -19,9 +19,31 @@ TypeScript hanya untuk tampilan di browser.
 | `tools` | `fake_ea.py` (simulator EA), `mock_tv.py` (TradingView tiruan), `mock_binance.py` (Binance tiruan), `tv_compat_test.py` |
 | `reference` | Engine Python & bias TS lama — **hanya acuan tes** (golden test) |
 
+## Unduh biner (tanpa clone)
+
+Satu berkas, klien web sudah tertanam di dalamnya. Ambil dari halaman [Releases](https://github.com/degidevops/mcdash/releases):
+
+| Platform | Berkas |
+|---|---|
+| Android / Termux (ARM64) | `mcdash-aarch64-linux-android` |
+| Linux x86_64 (statis) | `mcdash-x86_64-unknown-linux-musl` |
+| Linux ARM64 (statis, mis. Raspberry Pi) | `mcdash-aarch64-unknown-linux-musl` |
+| Windows x86_64 | `mcdash-x86_64-pc-windows-msvc.exe` |
+| macOS Apple Silicon / Intel | `mcdash-aarch64-apple-darwin` / `mcdash-x86_64-apple-darwin` |
+
+```sh
+# contoh Termux
+curl -L -o mcdash https://github.com/degidevops/mcdash/releases/latest/download/mcdash-aarch64-linux-android
+chmod +x mcdash
+./mcdash --host 127.0.0.1        # config.json dibuat otomatis; buka http://127.0.0.1:9898
+```
+Checksum ada di `SHA256SUMS.txt` pada rilis yang sama. EA MetaTrader 5 juga tertanam: unduh dari `http://<host>:9898/mt5/MCDashBridge.mq5`.
+Mengembangkan klien web tanpa compile ulang Rust: `mcdash --web web/dist` (atau env `MCDASH_WEB`).
+Membuat rilis: `git tag v0.2.0 && git push origin v0.2.0` (workflow `.github/workflows/release.yml`).
+
 ## Build & jalankan
 
-Butuh Rust (stable terbaru) dan Node 18+ (hanya untuk membangun klien web). Type check dan compile (emit) klien ke `web/dist` memakai `tsc` (bawaan) atau, sebagai pilihan, [tsrs](https://github.com/oxc-project/tsrs) (compiler TS berbasis Rust, biner native lewat npm; dipasang sebagai `optionalDependencies`, jadi gagal pasang tidak menggagalkan `npm install`). Keduanya menghasilkan `dist` yang sama; tanpa esbuild dan tanpa bundler (browser memuat modul ES langsung). Pilih dengan `TS=tsrs ./build.sh` atau langsung `npm run build:tsrs`.
+Butuh Rust (stable terbaru) dan Node 18+ (hanya untuk membangun klien web). Hasil build klien (`web/dist`) ditanam ke dalam biner saat `cargo build --release`, jadi bangun klien dulu. Type check dan compile (emit) klien ke `web/dist` memakai `tsc` (bawaan) atau, sebagai pilihan, [tsrs](https://github.com/oxc-project/tsrs) (compiler TS berbasis Rust, biner native lewat npm; dipasang sebagai `optionalDependencies`, jadi gagal pasang tidak menggagalkan `npm install`). Keduanya menghasilkan `dist` yang sama; tanpa esbuild dan tanpa bundler (browser memuat modul ES langsung). Pilih dengan `TS=tsrs ./build.sh` atau langsung `npm run build:tsrs`.
 
 ```sh
 ./build.sh                                   # web + server

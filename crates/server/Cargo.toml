@@ -13,4 +13,5 @@ axum = { version = "0.7", features = ["ws"] }
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 ureq = { version = "2", features = ["json"] }
+rust-embed = "8"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

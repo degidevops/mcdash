@@ -16,7 +16,7 @@ const HELP: &str = "mcdash — dashboard TPO (Rust + TS)
     --config <file>     config.json (default: config.json; dibuat otomatis bila belum ada)
     --host <alamat>     default 0.0.0.0 (pakai 127.0.0.1 agar hanya bisa diakses komputer ini)
     --port <n>          default 9898
-    --web <folder>      folder hasil build klien (default: web/dist)
+    --web <folder>      pakai klien web dari folder ini, bukan yang tertanam di biner (juga env MCDASH_WEB)
     --telegram <file>   default: telegram.json di folder yang sama dengan config
     --symbol <S>        timpa general.symbol (TradingView: OANDA:XAUUSD, Binance: XAUUSDT)
     --point <p>         timpa ukuran point
@@ -25,6 +25,7 @@ const HELP: &str = "mcdash — dashboard TPO (Rust + TS)
     --once              hitung sekali, cetak laporan teks, lalu keluar (tanpa web)
     --dump <profil>     cetak isi satu profil per baris (mis. S-1, D-now, W-1; angka = periode selesai ke-N dari belakang), lalu keluar
     --init-config       tulis config.json default lalu keluar
+    -V, --version       cetak versi lalu keluar
 ";
 
 struct Args {
@@ -63,6 +64,10 @@ fn parse_args() -> Result<Args, String> {
                 a.once = true;
             }
             "--init-config" => a.init = true,
+            "-V" | "--version" => {
+                println!("mcdash {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 print!("{HELP}");
                 std::process::exit(0);
@@ -73,23 +78,10 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-fn resolve_web(arg: Option<String>) -> PathBuf {
-    if let Some(w) = arg.or_else(|| std::env::var("MCDASH_WEB").ok()) {
-        return PathBuf::from(w);
-    }
-    let cwd = PathBuf::from("web/dist");
-    if cwd.join("index.html").exists() {
-        return cwd;
-    }
-    if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
-        for rel in ["web/dist", "../web/dist", "../../web/dist"] {
-            let p = dir.join(rel);
-            if p.join("index.html").exists() {
-                return p;
-            }
-        }
-    }
-    cwd
+/// `--web` / `MCDASH_WEB` mengalihkan ke folder di disk (untuk pengembangan klien tanpa compile ulang Rust).
+/// Tanpa keduanya, klien web yang tertanam di biner yang dipakai, jadi cukup satu file.
+fn resolve_web(arg: Option<String>) -> Option<PathBuf> {
+    arg.or_else(|| std::env::var("MCDASH_WEB").ok()).map(PathBuf::from)
 }
 
 #[tokio::main]
@@ -131,8 +123,12 @@ async fn main() {
         return;
     }
 
-    if !web_dir.join("index.html").exists() {
-        eprintln!("[web] {} belum berisi hasil build klien. Jalankan: cd web && npm install && npm run build", web_dir.display());
+    match &web_dir {
+        Some(d) if !d.join("index.html").exists() => {
+            eprintln!("[web] {} belum berisi hasil build klien. Jalankan: cd web && npm install && npm run build", d.display());
+        }
+        Some(d) => println!("[web] klien web dari disk: {}", d.display()),
+        None => {}
     }
     let mut runner_task = tokio::spawn(runner::run(app.clone(), opts));
     let a2 = app.clone();
