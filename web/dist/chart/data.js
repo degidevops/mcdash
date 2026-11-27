@@ -74,23 +74,30 @@ export class BarBuffer {
         }
         this.len += bars.length;
     }
-    /** Update or append a single bar */
-    upsert(bar) {
-        // find existing by timestamp (last few bars are most common)
-        for (let i = this.len - 1; i >= Math.max(0, this.len - 5); i--) {
-            if (this.t[i] === bar.t) {
-                this.o[i] = bar.o;
-                this.h[i] = bar.h;
-                this.l[i] = bar.l;
-                this.c[i] = bar.c;
-                this.v[i] = bar.v;
-                return;
-            }
+    /** Indeks pertama dengan t >= time. */
+    lowerBound(time) {
+        let lo = 0, hi = this.len;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (this.t[mid] < time)
+                lo = mid + 1;
+            else
+                hi = mid;
         }
-        // append
-        if (this.len >= this.cap)
-            this.grow();
-        const i = this.len++;
+        return lo;
+    }
+    /** Update bar dengan waktu yang sama, atau sisipkan pada posisi waktunya (biasanya di ujung). */
+    upsert(bar) {
+        const i = this.len > 0 && bar.t > this.t[this.len - 1] ? this.len : this.lowerBound(bar.t);
+        if (i === this.len || this.t[i] !== bar.t) {
+            if (this.len >= this.cap)
+                this.grow();
+            if (i < this.len) {
+                for (const a of [this.t, this.o, this.h, this.l, this.c, this.v])
+                    a.copyWithin(i + 1, i, this.len);
+            }
+            this.len++;
+        }
         this.t[i] = bar.t;
         this.o[i] = bar.o;
         this.h[i] = bar.h;

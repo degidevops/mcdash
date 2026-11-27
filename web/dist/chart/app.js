@@ -30,6 +30,12 @@ export class ChartApp {
     indPanelEl = null;
     indTpoEl = null;
     indNpocEl = null;
+    indNvaEl = null;
+    indNvaWrapEl = null;
+    btNvaEl = null;
+    tpoBusy = false;
+    tpoAgain = false;
+    reloading = false;
     indLettersEl = null;
     indVolEl = null;
     indNoteEl = null;
@@ -149,6 +155,14 @@ export class ChartApp {
         this.indTpoEl = document.getElementById('indTpo');
         this.indNpocEl = document.getElementById('indNpoc');
         this.indLettersEl = document.getElementById('indLetters');
+        this.indNvaEl = document.getElementById('indNva');
+        this.indNvaWrapEl = document.getElementById('indNvaWrap');
+        this.btNvaEl = document.getElementById('btNva');
+        try {
+            this.tpo.setNPOC(localStorage.getItem('mcdash.chart.npoc') !== '0');
+            this.tpo.setNVA(localStorage.getItem('mcdash.chart.nva') !== '0');
+        }
+        catch { /* ignore */ }
         this.indVolEl = document.getElementById('indVol');
         this.indNoteEl = document.getElementById('indNote');
         this.indTpoWrapEl = document.getElementById('indTpoWrap');
@@ -287,23 +301,33 @@ export class ChartApp {
             }
         });
         // Client
-        this.client = new ChartClient((bars) => { this.bars.load(bars); this.fitAndRender(); }, (price) => {
-            if (this.source !== 'main')
+        this.client = new ChartClient((bars) => { this.bars.load(bars); this.fitAndRender(); }, (price, wall) => {
+            if (this.source !== 'main' || !this.bufReady)
                 return; // harga tick WS hanya berlaku utk sumber utama
-            this.bars.updateLast(price);
+            // Bila periode bar berikutnya sudah mulai, jangan rusak high/low bar lama; bar barunya menyusul.
+            if (wall <= 0 || wall < this.bars.lastTime() + this.tf * 60)
+                this.bars.updateLast(price);
             this.updatePrice(price);
             this.markDirty();
-        }, (connected) => { this.dotEl.className = connected ? 'ok' : ''; }, (tpoData) => { this.tpo.setData(tpoData); this.markDirty(); }, (src, tf, full, frameBars) => {
+        }, (connected) => { this.dotEl.className = connected ? 'ok' : ''; }, () => { this.refreshTpo(); }, (src, tf, full, frameBars) => {
             // Frame live dari feed sumber alternatif
             if (src !== this.source || tf !== this.tf)
                 return;
+            if (src === 'main') {
+                if (full) {
+                    this.reloadKeepView();
+                    return;
+                } // riwayat sumber utama dimuat ulang di server
+                this.applyLiveBars(frameBars);
+                return;
+            }
             if (full) {
                 const wasEmpty = this.bars.len === 0;
                 if (!wasEmpty && frameBars.length < this.bars.len) {
                     // Frame "full" hanya tail 150 bar. Buffer lokal berisi history lebih banyak (hasil
                     // fetch REST / lazy-load, termasuk bar lama yang server pertahankan) — jangan ditimpa;
                     // muat ulang penuh agar bar terbaru fresh tanpa memangkas history yang sudah dimuat.
-                    this.refetchBars();
+                    this.reloadKeepView();
                     return;
                 }
                 this.bars.load(frameBars);
@@ -315,14 +339,10 @@ export class ChartApp {
                     this.fitAndRender();
             }
             else {
-                for (const b of frameBars)
-                    this.bars.upsert(b);
-                const lp = this.bars.lastPrice();
-                if (lp > 0)
-                    this.updatePrice(lp);
+                this.applyLiveBars(frameBars);
             }
             this.markDirty();
-        });
+        }, () => { this.reloadKeepView(); this.refreshTpo(); });
         // PanZoom with X and Y axis drag & zoom support and double-click auto-fit
         this.panzoom = new PanZoom(document.getElementById('chartMain'), document.getElementById('yAxis'), document.getElementById('xAxis'), this.vp, () => this.onViewportChanged(), (x, y) => { this.crosshair.update(x, y); this.markDirty(); }, () => { this.crosshair.hide(); this.markDirty(); }, (follow) => this.updateAutoFollowBtn(follow), () => this.isInteractingWithDrawing(), () => this.resetToLive());
         // Live bar timer tick every second for Y-axis countdown
@@ -385,10 +405,72 @@ export class ChartApp {
         }, 4 * 60 * 1000);
         // Fetch initial data with auto-retry
         const loadData = async () => {
-            this.client.fetchTpo().then(tpo => this.tpo.setData(tpo)).catch(() => { });
+            this.refreshTpo();
             await this.refetchBars();
         };
         await loadData();
+    }
+    // ------------------------------------------------------------ data live
+    /** Bar live (baru / berubah) dari server: gabungkan ke buffer, chart ikut bergeser bila Live aktif. */
+    applyLiveBars(frameBars) {
+        if (!this.bufReady || this.bars.len === 0)
+            return;
+        for (const b of frameBars) {
+            if (b.t >= this.bars.t[0])
+                this.bars.upsert(b);
+        }
+        this.updatePrice(this.bars.lastPrice());
+        this.markDirty();
+    }
+    /** Muat ulang bar tanpa mengubah posisi pandangan (riwayat server berubah / sambungan pulih). */
+    async reloadKeepView() {
+        if (!this.bufReady || this.reloading || this.bars.len === 0)
+            return;
+        this.reloading = true;
+        const tf = this.tf, src = this.source, seq = this.refetchSeq;
+        try {
+            const fresh = await this.client.fetchBars(tf, Math.max(this.barCount, Math.min(this.bars.len, 50000)));
+            if (fresh.length === 0 || tf !== this.tf || src !== this.source || seq !== this.refetchSeq)
+                return;
+            const span = this.vp.xMax - this.vp.xMin;
+            const anchor = Math.max(0, Math.min(this.bars.len - 1, Math.round(this.vp.xMax)));
+            const anchorT = this.bars.t[anchor], offset = this.vp.xMax - anchor;
+            this.bars.load(fresh);
+            this.noMoreHistory = false;
+            this.vp.xMax = this.bars.lowerBound(anchorT) + offset;
+            this.vp.xMin = this.vp.xMax - span;
+            this.updatePrice(this.bars.lastPrice());
+            this.markDirty();
+        }
+        catch { /* dicoba lagi pada frame/sambungan berikutnya */ }
+        finally {
+            this.reloading = false;
+        }
+    }
+    /** Ambil TPO profil aktif. Satu permintaan pada satu waktu; hanya periode terbaru yang diunduh ulang. */
+    async refreshTpo() {
+        if (this.tpoBusy) {
+            this.tpoAgain = true;
+            return;
+        }
+        this.tpoBusy = true;
+        try {
+            do {
+                this.tpoAgain = false;
+                const tag = this.tpo.activeTag;
+                if (!tag || this.source !== 'main')
+                    break;
+                const data = await this.client.fetchTpo(tag, this.tpo.since(tag));
+                if (!this.tpo.merge(tag, data))
+                    this.tpo.merge(tag, await this.client.fetchTpo(tag));
+                this.markDirty();
+                await new Promise(r => setTimeout(r, 500)); // batasi frekuensi
+            } while (this.tpoAgain);
+        }
+        catch { /* dicoba lagi pada pembaruan berikutnya */ }
+        finally {
+            this.tpoBusy = false;
+        }
     }
     // ------------------------------------------------------------ sumber data alternatif
     /** Muat daftar sumber dari server; kembalikan pilihan tersimpan bila masih tersedia. */
@@ -607,6 +689,18 @@ export class ChartApp {
                     return;
                 }
                 this.tpo.setNPOC(this.indNpocEl.checked);
+                this.syncIndicatorPanel();
+                this.markDirty();
+            });
+        }
+        if (this.indNvaEl) {
+            this.indNvaEl.addEventListener('change', () => {
+                if (this.source !== 'main') {
+                    this.syncIndicatorPanel();
+                    return;
+                }
+                this.tpo.setNVA(this.indNvaEl.checked);
+                this.syncIndicatorPanel();
                 this.markDirty();
             });
         }
@@ -748,6 +842,12 @@ export class ChartApp {
     }
     /** Sinkronkan isi panel Indikator dengan state renderer (TPO/nPOC/huruf/volume). */
     syncIndicatorPanel() {
+        try {
+            localStorage.setItem('mcdash.chart.npoc', this.tpo.showNPOC ? '1' : '0');
+            localStorage.setItem('mcdash.chart.nva', this.tpo.showNVA ? '1' : '0');
+        }
+        catch { /* ignore */ }
+        this.refreshTpo(); // profil aktif bisa baru berganti
         const tpoOn = this.tpo.activeTag !== null;
         if (tpoOn)
             this.tpoLastProfile = this.tpo.activeTag;
@@ -756,12 +856,14 @@ export class ChartApp {
         this.syncSegmented(this.segTpoProfileEl, this.tpo.activeTag ?? this.tpoLastProfile);
         if (this.indNpocEl)
             this.indNpocEl.checked = this.tpo.showNPOC;
+        if (this.indNvaEl)
+            this.indNvaEl.checked = this.tpo.showNVA;
         if (this.indLettersEl)
             this.indLettersEl.checked = this.tpo.showLetters;
         if (this.indVolEl)
             this.indVolEl.checked = this.indVolume;
         const ext = this.source !== 'main';
-        for (const el of [this.indTpoWrapEl, this.indNpocWrapEl, this.indLettersWrapEl]) {
+        for (const el of [this.indTpoWrapEl, this.indNpocWrapEl, this.indNvaWrapEl, this.indLettersWrapEl]) {
             el?.classList.toggle('off', ext);
         }
         if (this.indTpoEl)
@@ -770,6 +872,8 @@ export class ChartApp {
             this.indTpoGearEl.disabled = ext;
         if (this.indNpocEl)
             this.indNpocEl.disabled = ext;
+        if (this.indNvaEl)
+            this.indNvaEl.disabled = ext;
         if (this.indLettersEl)
             this.indLettersEl.disabled = ext;
         this.segTpoProfileEl?.querySelectorAll('button').forEach(b => {
@@ -780,7 +884,7 @@ export class ChartApp {
         if (this.indNoteEl) {
             this.indNoteEl.textContent = ext
                 ? 'TPO hanya dihitung untuk sumber utama.'
-                : 'TPO & nPOC dihitung dari sumber utama.';
+                : 'TPO, nPOC & nVA dihitung dari sumber utama.';
         }
         this.syncSettingsUI();
         this.syncBottomToolbar();
@@ -802,6 +906,15 @@ export class ChartApp {
                 if (this.source !== 'main')
                     return;
                 this.tpo.setNPOC(!this.tpo.showNPOC);
+                this.syncIndicatorPanel();
+                this.markDirty();
+            });
+        }
+        if (this.btNvaEl) {
+            this.btNvaEl.addEventListener('click', () => {
+                if (this.source !== 'main')
+                    return;
+                this.tpo.setNVA(!this.tpo.showNVA);
                 this.syncIndicatorPanel();
                 this.markDirty();
             });
@@ -842,6 +955,10 @@ export class ChartApp {
         if (this.btNpocEl) {
             this.btNpocEl.classList.toggle('on', this.tpo.showNPOC);
             this.btNpocEl.disabled = ext;
+        }
+        if (this.btNvaEl) {
+            this.btNvaEl.classList.toggle('on', this.tpo.showNVA);
+            this.btNvaEl.disabled = ext;
         }
         if (this.btLettersEl) {
             this.btLettersEl.classList.toggle('on', this.tpo.showLetters);
@@ -1013,6 +1130,15 @@ export class ChartApp {
                     if (this.source !== 'main')
                         break; // nPOC hanya utk sumber utama
                     this.tpo.toggleNPOC();
+                    this.syncIndicatorPanel();
+                    this.markDirty();
+                    break;
+                }
+                case 'a':
+                case 'A': {
+                    if (this.source !== 'main')
+                        break; // nVA hanya utk sumber utama
+                    this.tpo.toggleNVA();
                     this.syncIndicatorPanel();
                     this.markDirty();
                     break;

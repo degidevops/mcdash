@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Desired {
@@ -27,6 +27,7 @@ pub struct Desired {
 }
 
 const IDLE: Duration = Duration::from_secs(30); // EA mengirim heartbeat tiap ~5 dtk
+const RETRY_EMPTY: Duration = Duration::from_secs(5); // jeda sebelum meminta ulang riwayat yang datang kosong
 
 pub async fn run(id: u64, listen: SocketAddr, desired: watch::Receiver<Desired>, tx: Tx) {
     let mut listener = None;
@@ -117,6 +118,8 @@ async fn serve(id: u64, sock: TcpStream, mut desired: watch::Receiver<Desired>, 
     let mut raw_pending: HashMap<i64, Vec<i64>> = HashMap::new(); // waktu server mentah (untuk diagnostik zona)
     let mut auto_off: HashMap<i64, i64> = HashMap::new(); // tf -> offset terukur, untuk riwayat yang disimpan dengan waktu server mentah
     let mut diag_span: i64 = 0; // rentang riwayat (detik) terpanjang yang sudah didiagnosis
+    let mut retry: HashMap<i64, Instant> = HashMap::new(); // tf -> kapan riwayat kosong diminta ulang
+    let mut retry_tick = tokio::time::interval(Duration::from_secs(1));
     let end = |why: &str| {
         let _ = tx.send((id, FeedEvent::Status { text: Some(format!("EA MT5 terputus ({why}) — menunggu koneksi…")) }));
     };
@@ -155,6 +158,7 @@ async fn serve(id: u64, sock: TcpStream, mut desired: watch::Receiver<Desired>, 
                         hello = true;
                         requested.clear();
                         pending.clear();
+                        retry.clear();
                         let _ = tx.send((id, FeedEvent::Hello { symbol, point }));
                         let _ = tx.send((id, FeedEvent::Status { text: None }));
                         let d = desired.borrow().clone();
@@ -198,6 +202,17 @@ async fn serve(id: u64, sock: TcpStream, mut desired: watch::Receiver<Desired>, 
                                 bars = conv;
                                 if verbose { for l in lines { println!("{l}"); } }
                             }
+                            if bars.is_empty() {
+                                // MT5 belum selesai mengunduh riwayat tf ini. Kalau diterima sebagai "selesai", TPO
+                                // hanya dihitung dari segelintir bar live. Minta ulang beberapa detik lagi.
+                                println!("[mt5] riwayat M{tf} masih kosong (terminal MT5 belum memuatnya) -> diminta ulang");
+                                retry.insert(tf, Instant::now() + RETRY_EMPTY);
+                                let _ = tx.send((id, FeedEvent::Status { text: Some(format!("menunggu riwayat M{tf} dari MT5…")) }));
+                                continue;
+                            }
+                            if retry.remove(&tf).is_some() && retry.is_empty() {
+                                let _ = tx.send((id, FeedEvent::Status { text: None }));
+                            }
                             let _ = tx.send((id, FeedEvent::History { tf, bars, point }));
                         }
                     }
@@ -219,6 +234,18 @@ async fn serve(id: u64, sock: TcpStream, mut desired: watch::Receiver<Desired>, 
                         }
                     }
                     _ => {}
+                }
+            }
+            _ = retry_tick.tick() => {
+                let now = Instant::now();
+                let due: Vec<i64> = retry.iter().filter(|(_, at)| now >= **at).map(|(tf, _)| *tf).collect();
+                if !due.is_empty() {
+                    for tf in &due {
+                        requested.remove(tf);
+                        retry.insert(*tf, now + RETRY_EMPTY * 4); // menunggu jawaban; diulang lagi bila tidak datang
+                    }
+                    let d = desired.borrow().clone();
+                    if send_needs(&mut wr, &d, &mut requested).await.is_err() { return end("gagal menulis"); }
                 }
             }
             changed = desired.changed() => {

@@ -245,6 +245,7 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
           <button data-val="M" title="Volume Profile Bulanan">M</button>
         </div>
         <label class="cfg-check" id="indNpocWrap" title="Toggle naked POC Lines (Shortcut: N)"><input type="checkbox" id="indNpoc"> <span>nPOC (naked POC)</span></label>
+        <label class="cfg-check" id="indNvaWrap" title="Toggle naked VAH/VAL (Shortcut: A)"><input type="checkbox" id="indNva"> <span>nVA (naked VAH &amp; VAL)</span></label>
         <label class="cfg-check" id="indLettersWrap" title="Tampilkan huruf TPO A–Z di profil"><input type="checkbox" id="indLetters"> <span>Huruf TPO</span></label>
         <div class="cfg-range"><span>Lebar profil</span><input type="range" id="rgTpoW" min="30" max="90" step="5"><b id="rgTpoWv">70%</b></div>
       </div>
@@ -362,6 +363,7 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
     <div class="btb-sep"></div>
     <div class="btb-grp">
       <button class="btg" id="btNpoc" title="Naked POC Lines (Shortcut: N)">nPOC</button>
+      <button class="btg" id="btNva" title="Naked VAH/VAL Lines (Shortcut: A)">nVA</button>
       <button class="btg" id="btLetters" title="Huruf TPO (A–Z) di profile">Huruf</button>
       <button class="btg" id="btVol" title="Histogram volume di bawah chart">Volume</button>
     </div>
@@ -387,6 +389,7 @@ body{color:var(--tx);font:12px/1.4 var(--mono);font-variant-numeric:tabular-nums
       <tr><td><kbd>Del</kbd> / <kbd>Backspace</kbd></td><td>Hapus Gambar yang Dipilih</td></tr>
       <tr><td><kbd>P</kbd></td><td>Ganti Profil TPO (S / D / M / W / OFF)</td></tr>
       <tr><td><kbd>N</kbd></td><td>Toggle nPOC (Naked POC Lines)</td></tr>
+      <tr><td><kbd>A</kbd></td><td>Toggle nVA (Naked VAH &amp; VAL)</td></tr>
       <tr><td><kbd>I</kbd></td><td>Buka / Tutup Panel Indikator</td></tr>
       <tr><td><kbd>S</kbd></td><td>Buka / Tutup Panel Pengaturan Chart</td></tr>
       <tr><td><kbd>Home</kbd> / <kbd>DblClick</kbd></td><td>Reset ke Bar Terbaru &amp; Auto-fit (Live)</td></tr>

@@ -24,7 +24,12 @@ pub struct Series {
 
 impl Series {
     pub fn new(tf_min: i64, bars: &Bars) -> Series {
-        let n = bars.len();
+        Series::from_iter(tf_min, bars.iter())
+    }
+
+    /// Deret dari potongan bar terurut (mis. `bars.range(dari..)`).
+    pub fn from_iter<'a>(tf_min: i64, bars: impl Iterator<Item = (&'a i64, &'a Bar)>) -> Series {
+        let n = bars.size_hint().0;
         let mut s = Series { tf_min, t: Vec::with_capacity(n), o: Vec::with_capacity(n), h: Vec::with_capacity(n), l: Vec::with_capacity(n), c: Vec::with_capacity(n) };
         for (k, b) in bars {
             s.t.push(*k);

@@ -5,7 +5,7 @@ edition = "2021"
 description = "Inti murni tanpa I/O: model data, kalender, mesin TPO, bias, logika notifikasi."
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chrono-tz = "0.8"

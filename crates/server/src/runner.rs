@@ -4,8 +4,8 @@ use crate::feed::{binance, mt5, tradingview, FeedEvent, Tx};
 use mcdash_core::bias::{full_bias, ORDER};
 use mcdash_core::config::{self, Config, SourceCfg, SourceKind};
 use mcdash_core::util::decimals_of;
-use mcdash_core::{format_text, Bars, Snap, TpoEngine};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use mcdash_core::{format_text, Bar, Bars, ChartTpoResponse, Snap, TpoEngine};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -20,6 +20,30 @@ pub struct Opts {
     pub text: bool,
     pub once: bool,
     pub dump: Option<String>, // --dump <profil>: cetak isi profil per baris lalu keluar
+}
+
+/// Timeframe yang bisa dipilih di halaman /chart (selalu diminta dari sumber utama).
+const CHART_TFS: [i64; 6] = [1, 5, 15, 60, 240, 1440];
+/// Lebih banyak bar berubah sekaligus dari ini (mis. mengisi celah panjang) -> klien disuruh memuat ulang.
+const MAX_LIVE_FRAME: usize = 500;
+
+/// Hasil satu perhitungan TPO dari thread terpisah.
+struct Built {
+    generation: u64,
+    result: Result<(Snap, ChartTpoResponse), String>,
+    build_ms: f64,
+}
+
+/// Frame bar live sumber utama untuk halaman /chart.
+fn main_chart_frame(tf: i64, full: bool, bars: &[[f64; 6]]) -> String {
+    format!(
+        "{{\"k\":\"chart\",\"src\":\"main\",\"tf\":{tf},\"full\":{full},\"bars\":{}}}",
+        serde_json::to_string(bars).unwrap_or_else(|_| "[]".into())
+    )
+}
+
+fn row(ts: i64, b: &Bar) -> [f64; 6] {
+    [ts as f64, b.o, b.h, b.l, b.c, b.v]
 }
 
 struct Mt5Ctl {
@@ -66,25 +90,37 @@ struct Runner {
     last_status: String,
     last_cfg_check: f64,
     last_data: f64, // waktu event terakhir dari feed utama (bukan feed chart alternatif)
+    /// Perhitungan TPO berjalan di thread terpisah supaya tick & bar live tidak pernah menunggu.
+    building: bool,
+    generation: u64, // naik saat engine/data diganti; hasil perhitungan lama dibuang
+    built_tx: mpsc::UnboundedSender<Built>,
+    /// Bar sumber utama yang berubah dan belum disiarkan ke /chart: tf -> waktu bar.
+    chart_dirty: BTreeMap<i64, BTreeSet<i64>>,
+    chart_sent: f64,
 }
 
 pub async fn run(app: Arc<App>, opts: Opts) -> Result<(), String> {
     let (tx, mut rx) = mpsc::unbounded_channel::<(u64, FeedEvent)>();
-    let mut r = Runner::new(app, opts, tx);
+    let (built_tx, mut built_rx) = mpsc::unbounded_channel::<Built>();
+    let mut r = Runner::new(app, opts, tx, built_tx);
     r.reload_config(true)?;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             Some((id, ev)) = rx.recv() => r.handle_event(id, ev),
+            Some(built) = built_rx.recv() => {
+                if r.on_built(built) {
+                    return Ok(()); // --once
+                }
+            }
             _ = tick.tick() => {
+                r.flush_chart();
                 r.flush_tick();
                 r.check_config();
                 r.restart_feeds();
                 r.sync_chart_feeds();
-                if r.maybe_rebuild() {
-                    return Ok(()); // --once
-                }
+                r.maybe_rebuild();
                 r.heartbeat();
             }
         }
@@ -92,12 +128,13 @@ pub async fn run(app: Arc<App>, opts: Opts) -> Result<(), String> {
 }
 
 impl Runner {
-    fn new(app: Arc<App>, opts: Opts, tx: Tx) -> Runner {
+    fn new(app: Arc<App>, opts: Opts, tx: Tx, built_tx: mpsc::UnboundedSender<Built>) -> Runner {
         Runner {
             app, opts, tx, cfg: None, mtime: None, config_error: None, engine: None, symbol: String::new(), auto_point: None,
             bars: HashMap::new(), hist_done: HashSet::new(), next_id: 1, active: HashSet::new(), tv: HashMap::new(), chart_feeds: HashMap::new(), chart_cool: HashMap::new(), mt5: None, restart: vec![],
             dirty: false, force: false, last_build: 0.0, build_ms: 0.0, err: None, src_status: None, mt5_hello: false,
             tick: None, tick_sent: 0.0, tick_dirty: false, last_bias: String::new(), last_meta: 0.0, last_status: String::new(), last_cfg_check: 0.0, last_data: 0.0,
+            building: false, generation: 0, built_tx, chart_dirty: BTreeMap::new(), chart_sent: 0.0,
         }
     }
 
@@ -174,12 +211,13 @@ impl Runner {
         if cfg.atr_feed_tf > 0 && !needed.contains(&cfg.atr_feed_tf) {
             needed.push(cfg.atr_feed_tf);
         }
-        for &ctf in &[1, 5, 15, 60, 240, 1440] {
+        for &ctf in &CHART_TFS {
             if !needed.contains(&ctf) {
                 needed.push(ctf);
             }
         }
         self.engine = Some(self.make_engine(&cfg, &self.symbol.clone())?);
+        self.generation += 1;
         match cfg.source.kind {
             SourceKind::TradingView | SourceKind::Binance => self.sync_tv(&cfg, &needed),
             SourceKind::Mt5 => self.sync_mt5(&cfg, &needed)?,
@@ -197,6 +235,22 @@ impl Runner {
     fn drop_tf(&mut self, tf: i64) {
         self.bars.remove(&tf);
         self.hist_done.remove(&tf);
+        self.chart_dirty.remove(&tf);
+        if let Ok(mut sh) = self.app.shared.write() {
+            sh.chart_bars.remove(&tf);
+        }
+    }
+
+    /// Buang seluruh bar sumber utama (simbol / aturan waktu berubah).
+    fn clear_bars(&mut self) {
+        self.bars.clear();
+        self.hist_done.clear();
+        self.chart_dirty.clear();
+        self.generation += 1;
+        if let Ok(mut sh) = self.app.shared.write() {
+            sh.chart_bars.clear();
+            sh.chart_tpo = None;
+        }
     }
 
     /// Satu feed per timeframe; berlaku untuk TradingView dan Binance (map `tv` menampung keduanya).
@@ -246,8 +300,7 @@ impl Runner {
                     self.active.remove(&c.id);
                     if c.server_tz != cfg.source.mt5_server_tz {
                         // aturan waktu berubah: riwayat lama (dikonversi dengan aturan lama) dibuang, EA mengirim ulang
-                        self.bars.clear();
-                        self.hist_done.clear();
+                        self.clear_bars();
                         self.mt5_hello = false;
                     }
                 }
@@ -406,8 +459,7 @@ impl Runner {
         }
         self.active.clear();
         self.restart.clear();
-        self.bars.clear();
-        self.hist_done.clear();
+        self.clear_bars();
         self.engine = None;
         self.mt5_hello = false;
         self.src_status = None;
@@ -486,6 +538,10 @@ impl Runner {
                 if let Ok(mut sh) = self.app.shared.write() {
                     sh.chart_bars.insert(tf, bars);
                 }
+                if CHART_TFS.contains(&tf) {
+                    self.chart_dirty.remove(&tf);
+                    let _ = self.app.tx.send(main_chart_frame(tf, true, &[])); // /chart memuat ulang tf ini
+                }
             }
             FeedEvent::Live { tf, bars } => {
                 self.last_data = now_f();
@@ -500,10 +556,16 @@ impl Runner {
                 }
                 self.dirty = true;
                 self.force |= new_bar;
+                // Hanya bar yang berubah yang ditulis: menyalin seluruh riwayat di tiap update (MT5: puluhan
+                // kali per detik) membuat antrean event menumpuk dan data tertinggal saat history_bars besar.
                 if let Ok(mut sh) = self.app.shared.write() {
-                    if let Some(cur) = self.bars.get(&tf) {
-                        sh.chart_bars.insert(tf, cur.clone());
+                    let shared = sh.chart_bars.entry(tf).or_default();
+                    for (ts, b) in &bars {
+                        shared.insert(*ts, *b);
                     }
+                }
+                if CHART_TFS.contains(&tf) {
+                    self.chart_dirty.entry(tf).or_default().extend(bars.iter().map(|(ts, _)| *ts));
                 }
                 // harga = close bar terakhir dari feed timeframe terkecil (TradingView & Binance; MT5 mengirim bid langsung)
                 if self.tv.keys().min() == Some(&tf) {
@@ -521,8 +583,7 @@ impl Runner {
                 self.mt5_hello = true;
                 self.src_status = None;
                 if symbol != self.symbol {
-                    self.bars.clear();
-                    self.hist_done.clear();
+                    self.clear_bars();
                     self.symbol = symbol;
                     self.auto_point = None;
                     self.last_bias.clear();
@@ -621,6 +682,25 @@ impl Runner {
         let _ = self.app.tx.send(frame);
     }
 
+    /// Siarkan bar sumber utama yang berubah ke halaman /chart (maks. ~20x per detik).
+    fn flush_chart(&mut self) {
+        let now = now_f();
+        if self.chart_dirty.is_empty() || now - self.chart_sent < 0.045 {
+            return;
+        }
+        self.chart_sent = now;
+        for (tf, times) in std::mem::take(&mut self.chart_dirty) {
+            let Some(bars) = self.bars.get(&tf) else { continue };
+            let frame = if times.len() > MAX_LIVE_FRAME {
+                main_chart_frame(tf, true, &[])
+            } else {
+                let rows: Vec<[f64; 6]> = times.iter().filter_map(|t| bars.get(t).map(|b| row(*t, b))).collect();
+                main_chart_frame(tf, false, &rows)
+            };
+            let _ = self.app.tx.send(frame);
+        }
+    }
+
     fn flush_tick(&mut self) {
         if !self.tick_dirty {
             return;
@@ -648,41 +728,72 @@ impl Runner {
         let _ = self.app.tx.send(tick_frame(&TickState { p, wall, bias_json: changed }));
     }
 
-    /// Hitung ulang TPO bila perlu. Mengembalikan true bila mode --once selesai.
-    fn maybe_rebuild(&mut self) -> bool {
+    /// Mulai hitung ulang TPO bila perlu, di thread terpisah (satu perhitungan pada satu waktu).
+    fn maybe_rebuild(&mut self) {
         let now = now_f();
         let eff = self.opts.interval.max(self.build_ms / 1000.0 * 4.0); // perangkat lambat tidak dibebani terus-menerus
-        let Some(engine) = self.engine.as_mut() else { return false };
-        if !(self.dirty && engine.ready(&self.bars) && (self.force || now - self.last_build >= eff)) {
-            return false;
+        let Some(engine) = self.engine.as_ref() else { return };
+        if self.building || !(self.dirty && engine.ready(&self.bars) && (self.force || now - self.last_build >= eff)) {
+            return;
         }
         self.dirty = false;
         self.force = false;
         self.last_build = now;
         let t0 = Instant::now();
-        if let Err(e) = engine.rebuild(&self.bars) {
-            self.err = Some(format!("engine error: {e}"));
+        let series = match engine.prepare_series(&self.bars) {
+            Ok(s) => s,
+            Err(e) => {
+                self.err = Some(format!("engine error: {e}"));
+                return;
+            }
+        };
+        let mut job = engine.fresh();
+        let dump = self.opts.dump.clone();
+        let generation = self.generation;
+        let tx = self.built_tx.clone();
+        self.building = true;
+        let handle = tokio::task::spawn_blocking(move || {
+            job.rebuild_series(&series)?;
+            if let Some(name) = &dump {
+                match job.dump(name) {
+                    Ok(t) => println!("{t}"),
+                    Err(e) => eprintln!("{e}"),
+                }
+            }
+            Ok::<_, String>((job.snapshot(), job.chart_tpo()))
+        });
+        tokio::spawn(async move {
+            let result = handle.await.unwrap_or_else(|e| Err(e.to_string()));
+            let _ = tx.send(Built { generation, result, build_ms: t0.elapsed().as_secs_f64() * 1000.0 });
+        });
+    }
+
+    /// Terima hasil perhitungan. Mengembalikan true bila mode --once selesai.
+    fn on_built(&mut self, built: Built) -> bool {
+        self.building = false;
+        if built.generation != self.generation {
+            self.dirty = true; // engine/data diganti selagi menghitung: hitung ulang dari yang baru
             return false;
         }
-        if let Some(name) = &self.opts.dump {
-            match engine.dump(name) {
-                Ok(t) => println!("{t}"),
-                Err(e) => eprintln!("{e}"),
+        let (mut snap, chart_tpo) = match built.result {
+            Ok(r) => r,
+            Err(e) => {
+                self.err = Some(format!("engine error: {e}"));
+                return false;
             }
-        }
-        let mut snap = engine.snapshot();
-        self.build_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        };
+        self.build_ms = built.build_ms;
         self.err = None;
         if let Some((p, wall)) = self.tick {
-            if now - wall < 5.0 {
+            if now_f() - wall < 5.0 {
                 snap.price = p; // tick lebih baru daripada close bar
             }
         }
-        self.publish(snap);
+        self.publish(snap, chart_tpo);
         self.opts.once
     }
 
-    fn publish(&mut self, snap: Snap) {
+    fn publish(&mut self, snap: Snap, chart_tpo: ChartTpoResponse) {
         let full = full_bias(&snap, decimals_of(snap.point), &ORDER);
         self.last_bias = serde_json::to_string(&full).unwrap_or_default();
         let meta = self.meta();
@@ -690,15 +801,13 @@ impl Runner {
         if self.opts.text {
             println!("{}", format_text(&snap));
         }
-        let chart_tpo = self.engine.as_ref().map(|e| e.chart_tpo());
         {
             let mut sh = self.app.shared.write().unwrap();
             sh.tick = self.tick.map(|(p, wall)| TickState { p, wall, bias_json: Some(self.last_bias.clone()) });
             sh.meta = meta;
             sh.snap = Some(snap);
             sh.snap_frame = Some(frame.clone());
-            sh.chart_bars = self.bars.clone();
-            sh.chart_tpo = chart_tpo;
+            sh.chart_tpo = Some(chart_tpo);
         }
         self.last_meta = now_f();
         let _ = self.app.tx.send(frame);

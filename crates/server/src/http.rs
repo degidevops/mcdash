@@ -250,18 +250,18 @@ async fn chart_info(State(app): State<Arc<App>>) -> Response {
 #[derive(serde::Deserialize)]
 struct ChartTpoQuery {
     tag: Option<String>,
+    /// Baris histogram hanya dikirim untuk periode yang mulai >= nilai ini (dan periode berjalan);
+    /// klien memakai cache untuk periode yang lebih lama. Kosong = kirim semua.
+    since: Option<i64>,
 }
 
-/// GET /api/chart-tpo?tag=S
+/// GET /api/chart-tpo?tag=S[&since=<epoch>]
 async fn chart_tpo(State(app): State<Arc<App>>, axum::extract::Query(q): axum::extract::Query<ChartTpoQuery>) -> Response {
     let sh = app.shared.read().unwrap();
     if let Some(tpo) = sh.chart_tpo.as_ref() {
-        if let Some(tag) = q.tag {
-            let mut filtered = tpo.clone();
-            filtered.profiles.retain(|k, _| k == &tag);
-            return json_resp(StatusCode::OK, serde_json::to_string(&filtered).unwrap_or_else(|_| "{}".into()));
-        }
-        return json_resp(StatusCode::OK, serde_json::to_string(tpo).unwrap_or_else(|_| "{}".into()));
+        let view = tpo.view(q.tag.as_deref(), q.since);
+        drop(sh); // serialisasi di luar kunci agar runner tidak tertahan
+        return json_resp(StatusCode::OK, serde_json::to_string(&view).unwrap_or_else(|_| "{}".into()));
     }
     let sym = sh.snap.as_ref().map(|s| s.symbol.clone()).unwrap_or_default();
     let pt = sh.snap.as_ref().map(|s| s.point).unwrap_or(0.01);
@@ -318,11 +318,30 @@ async fn tg_test(State(app): State<Arc<App>>) -> Response {
     }
 }
 
-async fn ws_upgrade(State(app): State<Arc<App>>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |sock| client(sock, app))
+#[derive(serde::Deserialize)]
+struct WsQuery {
+    /// `chart=1`: klien halaman /chart.
+    chart: Option<u8>,
 }
 
-async fn client(mut sock: WebSocket, app: Arc<App>) {
+async fn ws_upgrade(State(app): State<Arc<App>>, axum::extract::Query(q): axum::extract::Query<WsQuery>, ws: WebSocketUpgrade) -> Response {
+    let chart = q.chart == Some(1);
+    ws.on_upgrade(move |sock| client(sock, app, chart))
+}
+
+/// Saring siaran per jenis halaman. /chart tidak memakai snapshot dashboard (ratusan KB tiap perhitungan),
+/// cukup tahu bahwa TPO berubah; dashboard tidak memakai frame bar chart.
+fn frame_for(chart: bool, frame: String) -> Option<String> {
+    if chart {
+        Some(if frame.starts_with("{\"now\":") { "{\"k\":\"tpo\"}".to_string() } else { frame })
+    } else if frame.starts_with("{\"k\":\"chart\"") {
+        None
+    } else {
+        Some(frame)
+    }
+}
+
+async fn client(mut sock: WebSocket, app: Arc<App>, chart: bool) {
     let mut rx = app.tx.subscribe();
     let initial = |app: &App| {
         let sh = app.shared.read().unwrap();
@@ -336,7 +355,7 @@ async fn client(mut sock: WebSocket, app: Arc<App>) {
         }
         v
     };
-    for f in initial(&app) {
+    for f in initial(&app).into_iter().filter_map(|f| frame_for(chart, f)) {
         if sock.send(Message::Text(f)).await.is_err() {
             return;
         }
@@ -344,10 +363,18 @@ async fn client(mut sock: WebSocket, app: Arc<App>) {
     loop {
         tokio::select! {
             m = rx.recv() => match m {
-                Ok(t) => { if sock.send(Message::Text(t)).await.is_err() { return; } }
+                Ok(t) => {
+                    if let Some(t) = frame_for(chart, t) {
+                        if sock.send(Message::Text(t)).await.is_err() { return; }
+                    }
+                }
                 Err(RecvError::Lagged(_)) => {
                     // klien terlambat: kirim ulang keadaan terbaru
-                    for f in initial(&app) { if sock.send(Message::Text(f)).await.is_err() { return; } }
+                    let mut frames: Vec<String> = initial(&app).into_iter().filter_map(|f| frame_for(chart, f)).collect();
+                    if chart {
+                        frames.push("{\"k\":\"resync\"}".into()); // ada frame bar yang terlewat
+                    }
+                    for f in frames { if sock.send(Message::Text(f)).await.is_err() { return; } }
                 }
                 Err(RecvError::Closed) => return,
             },
@@ -375,6 +402,16 @@ mod tests {
             notifier: crate::notifier::Notifier::new(PathBuf::from("telegram.json")),
         });
         let _ = router(app);
+    }
+
+    #[test]
+    fn frame_disaring_per_halaman() {
+        let snap = snapshot_frame(&Meta::default(), None, None);
+        assert_eq!(frame_for(true, snap.clone()).as_deref(), Some("{\"k\":\"tpo\"}"));
+        assert_eq!(frame_for(false, snap.clone()), Some(snap));
+        let bar = "{\"k\":\"chart\",\"src\":\"main\",\"tf\":1,\"full\":false,\"bars\":[]}".to_string();
+        assert_eq!(frame_for(false, bar.clone()), None);
+        assert_eq!(frame_for(true, bar.clone()), Some(bar));
     }
 
     #[test]

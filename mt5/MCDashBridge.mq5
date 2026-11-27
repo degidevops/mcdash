@@ -20,9 +20,13 @@
 //|  pekerjaan), sehingga kiriman live tidak lagi terblokir selama   |
 //|  riwayat panjang ditransfer — penyebab data "delay" pada         |
 //|  startup/restart/konfigurasi baru.                               |
+//|                                                                  |
+//|  v1.20: menunggu riwayat selesai disinkronkan terminal sebelum   |
+//|  mengirim (tanpa memblokir live), dan pengiriman socket diulang  |
+//|  sampai seluruh baris terkirim.                                  |
 //+------------------------------------------------------------------+
 #property copyright "mcdash"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 
 input string InpHost    = "127.0.0.1"; // alamat server mcdash
@@ -43,6 +47,8 @@ bool     g_ready     = false;          // hello sudah terkirim
 int      g_qTf[32];                    // timeframe yang menunggu pengiriman riwayat
 int      g_qCnt[32];                   // jumlah bar yang diminta server
 int      g_qN        = 0;              // panjang antrean
+int      g_qTry[32];                   // sudah berapa kali menunggu riwayat tf ini siap
+uint     g_jobWait   = 0;              // GetTickCount() saat riwayat belum siap terakhir kali
 int      g_jobTf     = 0;              // timeframe pekerjaan berjalan (0 = tidak ada)
 MqlRates g_jobRates[];                 // snapshot bar untuk pekerjaan berjalan
 int      g_jobGot    = 0;              // jumlah bar terambil
@@ -75,6 +81,7 @@ void CloseSock()
    g_rx    = "";
    ArrayResize(g_tfs, 0);
    g_qN      = 0;
+   g_jobWait = 0;
    g_jobTf   = 0;
    g_jobGot  = 0;
    g_jobSent = 0;
@@ -96,7 +103,21 @@ bool SendLine(const string s)
    int n = StringToCharArray(s + "\n", buf, 0, WHOLE_ARRAY, CP_UTF8) - 1; // tanpa null terminator
    if(n <= 0)
       return false;
-   return SocketSend(g_sock, buf, n) == n;
+   int sent = 0;
+   while(sent < n) // SocketSend boleh mengirim sebagian: lanjutkan sampai habis
+     {
+      uchar part[];
+      if(sent > 0)
+         ArrayCopy(part, buf, 0, sent, n - sent);
+      int k = (sent > 0) ? SocketSend(g_sock, part, n - sent) : SocketSend(g_sock, buf, n);
+      if(k <= 0)
+        {
+         CloseSock(); // baris terpotong merusak protokol: sambung ulang dari awal
+         return false;
+        }
+      sent += k;
+     }
+   return true;
   }
 
 ENUM_TIMEFRAMES TfFromMinutes(const int m)
@@ -136,32 +157,31 @@ string BarJson(const MqlRates &r, const long off)
           IntegerToString((long)r.tick_volume) + "]";
   }
 
-//--- mulai pekerjaan riwayat: ambil snapshot bar sekali, potongan dikirim bertahap oleh JobStep()
-void JobStart(const int tfMin, const int count)
+//--- mulai pekerjaan riwayat: ambil snapshot bar sekali, potongan dikirim bertahap oleh JobStep().
+//    false = terminal belum selesai memuat riwayat tf ini (coba lagi nanti).
+bool JobStart(const int tfMin, const int count, const bool lastTry)
   {
    ENUM_TIMEFRAMES tf = TfFromMinutes(tfMin);
    if(tf == PERIOD_CURRENT)
      {
       Print("MCDashBridge: timeframe M", tfMin, " tidak didukung");
       SendLine("{\"t\":\"bars\",\"tf\":" + IntegerToString(tfMin) + ",\"b\":[],\"last\":true}");
-      return;
+      return true;
      }
    ArraySetAsSeries(g_jobRates, false);
-   int got = -1;
-   for(int attempt = 0; attempt < 5 && got <= 0; attempt++)
-     {
-      got = CopyRates(_Symbol, tf, 0, count, g_jobRates);
-      if(got <= 0)
-         Sleep(200); // data riwayat mungkin belum termuat
-     }
+   int  got    = CopyRates(_Symbol, tf, 0, count, g_jobRates); // sekaligus memicu unduhan riwayat
+   bool synced = (bool)SeriesInfoInteger(_Symbol, tf, SERIES_SYNCHRONIZED);
+   if((got <= 0 || !synced) && !lastTry)
+      return false;
    if(got <= 0)
      {
       SendLine("{\"t\":\"bars\",\"tf\":" + IntegerToString(tfMin) + ",\"b\":[],\"last\":true}");
-      return;
+      return true;
      }
    g_jobTf    = tfMin;
    g_jobGot   = got;
    g_jobSent  = 0;
+   return true;
   }
 
 //--- kirim satu potongan riwayat per pemanggilan; panggil tiap tick timer agar live tidak terblokir
@@ -169,16 +189,25 @@ void JobStep()
   {
    if(g_jobTf == 0)
      {
-      if(g_qN > 0) // mulai pekerjaan berikutnya dari antrean
+      if(g_qN > 0 && GetTickCount() - g_jobWait >= 500) // mulai pekerjaan berikutnya dari antrean
         {
-         int tf = g_qTf[0], cnt = g_qCnt[0];
+         int tf = g_qTf[0], cnt = g_qCnt[0], tries = g_qTry[0];
          g_qN--;
          for(int i = 0; i < g_qN; i++)
            {
             g_qTf[i]  = g_qTf[i + 1];
             g_qCnt[i] = g_qCnt[i + 1];
+            g_qTry[i] = g_qTry[i + 1];
            }
-         JobStart(tf, cnt);
+         if(!JobStart(tf, cnt, tries >= 60))
+           {
+            // belum siap: pindah ke belakang antrean, dicoba lagi 0,5 dtk kemudian
+            g_qTf[g_qN]  = tf;
+            g_qCnt[g_qN] = cnt;
+            g_qTry[g_qN] = tries + 1;
+            g_qN++;
+            g_jobWait = GetTickCount();
+           }
         }
       return;
      }
@@ -291,6 +320,7 @@ void HandleLine(const string line)
            {
             g_qTf[g_qN]  = tf;
             g_qCnt[g_qN] = count;
+            g_qTry[g_qN] = 0;
             g_qN++;
            }
         }

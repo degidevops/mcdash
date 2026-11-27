@@ -115,13 +115,22 @@ impl Profile {
         self.cal.bounds(self.cfg.mode, last_t - look).0
     }
 
+    /// Jendela data yang dibutuhkan `build`: (awal periode pertama, jumlah bar sebelum itu untuk tick otomatis).
+    pub fn window(&self, last_t: i64, tf_min: i64) -> (i64, usize) {
+        (self.first_ps(last_t), self.lookback_bars(tf_min))
+    }
+
+    fn lookback_bars(&self, tf_min: i64) -> usize {
+        let lb_min = std::cmp::max(20, std::cmp::min(self.dur() / 60, 20000));
+        std::cmp::max(2, py_round(lb_min as f64 / tf_min as f64)) as usize
+    }
+
     /// Tick otomatis dari range bar sebelum periode mulai (setara lb bar M1 di MQ5).
     fn initial_tick(&self, ps: i64, ser: &Series) -> f64 {
         if self.cfg.ticks > 0 {
             return self.cfg.ticks as f64 * self.point;
         }
-        let lb_min = std::cmp::max(20, std::cmp::min(self.dur() / 60, 20000));
-        let lb = std::cmp::max(2, py_round(lb_min as f64 / ser.tf_min as f64)) as usize;
+        let lb = self.lookback_bars(ser.tf_min);
         let i1 = ser.lower_bound(ps);
         let i0 = i1.saturating_sub(lb);
         if i1 - i0 < 2 {

@@ -1,11 +1,47 @@
 import { settings } from './settings.js';
 export class TpoRenderer {
-    data = null;
+    profiles = {};
+    cache = {};
     activeTag = 'S'; // 'S' | 'D' | 'M' | 'W' | null (null = off)
     showNPOC = true;
+    showNVA = true;
     showLetters = true;
-    setData(data) {
-        this.data = data;
+    /** Nilai `since` untuk permintaan berikutnya: baris periode yang lebih lama dari ini sudah ada di cache. */
+    since(tag) {
+        const periods = this.profiles[tag]?.periods;
+        if (!periods)
+            return undefined;
+        for (let i = periods.length - 1; i >= 0; i--) {
+            if (!periods[i].developing)
+                return periods[i].start;
+        }
+        return undefined;
+    }
+    /** Gabungkan jawaban server dengan cache. false = ada baris yang tidak dimiliki -> minta ulang penuh. */
+    merge(tag, data) {
+        const profile = data.profiles?.[tag];
+        if (!profile) {
+            delete this.profiles[tag];
+            delete this.cache[tag];
+            return true;
+        }
+        const old = this.cache[tag] ?? new Map();
+        const next = new Map();
+        for (const p of profile.periods) {
+            if (!p.rows) {
+                const hit = old.get(p.start);
+                if (!hit || hit.sig !== p.sig) {
+                    delete this.cache[tag];
+                    delete this.profiles[tag];
+                    return false;
+                }
+                p.rows = hit.rows;
+            }
+            next.set(p.start, { sig: p.sig, rows: p.rows });
+        }
+        this.cache[tag] = next;
+        this.profiles[tag] = profile;
+        return true;
     }
     toggleProfile() {
         const sequence = ['S', 'D', 'M', 'W', null];
@@ -24,6 +60,13 @@ export class TpoRenderer {
     }
     setNPOC(on) {
         this.showNPOC = on;
+    }
+    toggleNVA() {
+        this.showNVA = !this.showNVA;
+        return this.showNVA;
+    }
+    setNVA(on) {
+        this.showNVA = on;
     }
     setLetters(on) {
         this.showLetters = on;
@@ -81,10 +124,10 @@ export class TpoRenderer {
         return vp.xToScreen(barPos);
     }
     draw(ctx, vp, bars) {
-        if (!this.data || !this.activeTag)
+        if (!this.activeTag)
             return;
         // Data TPO bisa kosong (server belum siap / sumber tanpa TPO) — jangan crash.
-        const profile = this.data.profiles?.[this.activeTag];
+        const profile = this.profiles[this.activeTag];
         if (!profile || !profile.periods || profile.periods.length === 0)
             return;
         const chartW = vp.w;
@@ -102,13 +145,8 @@ export class TpoRenderer {
             if (xStart === null || xEnd === null)
                 continue;
             // Skip if period is completely outside horizontal viewport
-            if (Math.max(xStart, xEnd) < 0 || Math.min(xStart, xEnd) > chartW) {
-                // Still might need to draw nPOC if it extends across screen
-                if (this.showNPOC && !period.touched_poc) {
-                    this.drawNPocLine(ctx, period, xStart, chartW, vp, dpr);
-                }
+            if (Math.max(xStart, xEnd) < 0 || Math.min(xStart, xEnd) > chartW)
                 continue;
-            }
             // 1.1 Session Separator line at xStart
             ctx.save();
             ctx.strokeStyle = '#363A45';
@@ -126,50 +164,116 @@ export class TpoRenderer {
             ctx.fillText(`╎ ${period.name}`, xStart + 4 * dpr, 18 * dpr);
             ctx.restore();
             // 1.2 TPO Histogram Blocks
-            if (period.rows && period.rows.length > 0) {
-                let maxCount = 1;
-                for (const r of period.rows) {
-                    if (r.count > maxCount)
-                        maxCount = r.count;
-                }
-                const periodWidth = Math.abs(xEnd - xStart);
-                // Lebar histogram TPO bisa diatur dari Panel Indikator → parameter TPO.
-                const maxHistWidth = Math.min(periodWidth * settings.data.tpoWidth, 280 * dpr);
-                for (const row of period.rows) {
-                    if (row.price < vp.yMin || row.price > vp.yMax)
-                        continue;
-                    const yCenter = vp.yToScreen(row.price);
-                    const yNext = vp.yToScreen(row.price + period.tick);
-                    const rowHeight = Math.max(1 * dpr, Math.abs(yCenter - yNext));
-                    const barWidth = (row.count / maxCount) * maxHistWidth;
-                    // Color based on status
-                    if (row.is_poc) {
-                        ctx.fillStyle = 'rgba(239, 83, 80, 0.40)'; // POC highlight
-                    }
-                    else if (row.in_va) {
-                        ctx.fillStyle = 'rgba(41, 98, 255, 0.22)'; // Value Area
-                    }
-                    else {
-                        ctx.fillStyle = 'rgba(120, 123, 134, 0.12)'; // Outside VA
-                    }
-                    ctx.fillRect(xStart, yCenter - rowHeight / 2, barWidth, Math.max(1 * dpr, rowHeight - 0.5 * dpr));
-                    // Draw letters if zoomed in enough vertically
-                    if (this.showLetters && rowHeight >= 11 * dpr && barWidth > 15 * dpr) {
-                        ctx.font = `${Math.round(9 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
-                        ctx.fillStyle = row.is_poc ? '#FF8A80' : row.in_va ? '#90CAF9' : '#B0BEC5';
-                        ctx.textAlign = 'left';
-                        ctx.fillText(row.letters, xStart + 3 * dpr, yCenter + 3 * dpr, barWidth - 4 * dpr);
-                    }
-                }
-            }
+            // Lebar histogram TPO bisa diatur dari Panel Indikator → parameter TPO.
+            const maxHistWidth = Math.min(Math.abs(xEnd - xStart) * settings.data.tpoWidth, 280 * dpr);
+            this.drawHistogram(ctx, period, xStart, maxHistWidth, vp, dpr);
             // 1.3 POC, VAH, VAL Lines for this period
             this.drawPeriodLevels(ctx, period, xStart, xEnd, vp, dpr);
-            // 1.4 Naked POC extension if applicable
-            if (this.showNPOC && !period.touched_poc) {
-                this.drawNPocLine(ctx, period, xStart, chartW, vp, dpr);
+        }
+        // 2. Perpanjangan nPOC / nVA: naked -> sampai tepi kanan; tersentuh -> berhenti di candle penyentuh.
+        //    Digambar untuk semua periode, termasuk yang profilnya sudah di luar layar.
+        const badges = [];
+        for (let i = profile.periods.length - 1; i >= 0; i--) {
+            const period = profile.periods[i];
+            if (period.developing)
+                continue; // levelnya masih bergerak
+            const xFrom = this.timeToScreenX(period.end, bars, vp);
+            if (xFrom === null)
+                continue;
+            const levels = [
+                [this.showNPOC, 'nPOC', period.poc, period.touch_poc, '#FF1744'],
+                [this.showNVA, 'nVAH', period.vah, period.touch_vah, '#FF9800'],
+                [this.showNVA, 'nVAL', period.val, period.touch_val, '#29B6F6'],
+            ];
+            for (const [on, label, price, touch, color] of levels) {
+                if (!on || price <= 0)
+                    continue;
+                const y = vp.yToScreen(price);
+                if (y < 0 || y > chartH)
+                    continue;
+                if (touch === null) {
+                    this.drawNakedLine(ctx, `${label} ${period.name}: ${price.toFixed(2)}`, xFrom, y, chartW, color, dpr, badges);
+                }
+                else {
+                    const idx = this.touchBarIndex(bars, touch, profile.tf_min, price);
+                    if (idx === null)
+                        continue; // bar penyentuh lebih tua dari data yang dimuat
+                    this.drawTouchedLine(ctx, xFrom, vp.xToScreen(idx), y, chartW, color, dpr);
+                }
             }
         }
         ctx.restore();
+    }
+    drawHistogram(ctx, period, xStart, maxHistWidth, vp, dpr) {
+        const rows = period.rows;
+        if (!rows || rows.length === 0)
+            return;
+        let maxCount = 1;
+        for (const r of rows) {
+            if (r.count > maxCount)
+                maxCount = r.count;
+        }
+        const tick = period.tick;
+        const rowPx = Math.abs(vp.yToScreen(0) - vp.yToScreen(tick));
+        const letters = this.showLetters && rowPx >= 11 * dpr;
+        for (const row of rows) {
+            const bottom = row.price - tick / 2;
+            const top = row.price + (row.n - 0.5) * tick;
+            if (top < vp.yMin || bottom > vp.yMax)
+                continue;
+            // Color based on status
+            const fill = row.is_poc ? 'rgba(239, 83, 80, 0.60)' // POC highlight
+                : row.in_va ? 'rgba(41, 98, 255, 0.42)' // Value Area
+                    : 'rgba(120, 123, 134, 0.28)'; // Outside VA
+            ctx.fillStyle = fill;
+            const barWidth = (row.count / maxCount) * maxHistWidth;
+            if (rowPx < 3 * dpr) {
+                // baris terlalu tipis untuk dipisah: satu persegi untuk seluruh segmen
+                const y0 = vp.yToScreen(top);
+                ctx.fillRect(xStart, y0, barWidth, Math.max(1, vp.yToScreen(bottom) - y0));
+                continue;
+            }
+            // hanya baris yang terlihat
+            const k0 = Math.max(0, Math.floor((vp.yMin - row.price) / tick));
+            const k1 = Math.min(row.n - 1, Math.ceil((vp.yMax - row.price) / tick));
+            for (let k = k0; k <= k1; k++) {
+                const y = vp.yToScreen(row.price + k * tick);
+                ctx.fillRect(xStart, y - rowPx / 2, barWidth, Math.max(1 * dpr, rowPx - 0.5 * dpr));
+                // Draw letters if zoomed in enough vertically
+                if (letters && barWidth > 15 * dpr) {
+                    ctx.font = `${Math.round(9 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
+                    ctx.fillStyle = row.is_poc ? '#FF8A80' : row.in_va ? '#90CAF9' : '#B0BEC5';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'alphabetic';
+                    ctx.fillText(row.letters, xStart + 3 * dpr, y + 3 * dpr, barWidth - 4 * dpr);
+                    ctx.fillStyle = fill;
+                }
+            }
+        }
+    }
+    /** Indeks candle (pada timeframe chart) yang pertama menyentuh level. `touchTime` = waktu bar feed (tf_min)
+     *  yang menyentuh; pada chart yang lebih halus dicari candle pertama di dalam rentang itu yang memuat harga. */
+    touchBarIndex(bars, touchTime, feedTf, price) {
+        const n = bars.len;
+        if (n === 0)
+            return null;
+        // indeks terakhir dengan t <= touchTime
+        let lo = 0;
+        let hi = n;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (bars.t[mid] <= touchTime)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        const base = lo - 1;
+        const end = touchTime + feedTf * 60;
+        for (let j = Math.max(0, base); j < n && bars.t[j] < end; j++) {
+            if (bars.l[j] <= price && bars.h[j] >= price)
+                return j;
+        }
+        return base >= 0 ? base : null;
     }
     drawPeriodLevels(ctx, period, xStart, xEnd, vp, dpr) {
         const left = Math.min(xStart, xEnd);
@@ -220,38 +324,61 @@ export class TpoRenderer {
             ctx.restore();
         }
     }
-    drawNPocLine(ctx, period, xStart, chartW, vp, dpr) {
-        if (period.poc <= 0)
-            return;
-        const yPoc = vp.yToScreen(period.poc);
-        if (yPoc < 0 || yPoc > vp.chartH)
+    /** Level yang belum tersentuh: memanjang sampai tepi kanan dengan label (label tidak saling menimpa). */
+    drawNakedLine(ctx, tag, xFrom, y, chartW, color, dpr, badges) {
+        if (xFrom > chartW)
             return;
         ctx.save();
-        ctx.strokeStyle = '#FF1744';
+        ctx.strokeStyle = color;
         ctx.lineWidth = 1.5 * dpr;
         ctx.setLineDash([3 * dpr, 3 * dpr]);
         ctx.beginPath();
-        ctx.moveTo(Math.max(0, xStart), yPoc);
-        ctx.lineTo(chartW, yPoc);
+        ctx.moveTo(Math.max(0, xFrom), y);
+        ctx.lineTo(chartW, y);
         ctx.stroke();
-        // Naked POC Tag near right edge
-        const tag = `nPOC ${period.name}: ${period.poc.toFixed(2)}`;
         ctx.font = `bold ${Math.round(9.5 * dpr)}px "Inter","Segoe UI",Roboto,Arial,sans-serif`;
-        const tw = ctx.measureText(tag).width;
         const pad = 6 * dpr;
-        const badgeH = 16 * dpr;
-        const bx = chartW - tw - pad * 2 - 4 * dpr;
-        const by = yPoc - badgeH / 2;
-        ctx.fillStyle = 'rgba(19, 23, 34, 0.90)';
-        ctx.strokeStyle = '#FF1744';
-        ctx.lineWidth = 1 * dpr;
+        const bw = ctx.measureText(tag).width + pad * 2;
+        const bh = 16 * dpr;
+        const box = { x0: chartW - bw - 4 * dpr, x1: chartW - 4 * dpr, y0: y - bh / 2, y1: y + bh / 2 };
+        let clash;
+        while ((clash = badges.find(b => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0))) {
+            box.x1 = clash.x0 - 3 * dpr;
+            box.x0 = box.x1 - bw;
+        }
+        if (box.x0 >= 0) {
+            badges.push(box);
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1 * dpr;
+            ctx.fillStyle = 'rgba(19, 23, 34, 0.90)';
+            ctx.fillRect(box.x0, box.y0, bw, bh);
+            ctx.strokeRect(box.x0, box.y0, bw, bh);
+            ctx.fillStyle = color;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(tag, box.x0 + pad, y);
+        }
+        ctx.restore();
+    }
+    /** Level yang sudah tersentuh: berhenti tepat di candle penyentuh (ditandai garis tegak pendek). */
+    drawTouchedLine(ctx, xFrom, xTouch, y, chartW, color, dpr) {
+        if (xTouch < 0 || Math.min(xFrom, xTouch) > chartW)
+            return;
+        ctx.save();
+        ctx.globalAlpha = 0.65;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.25 * dpr;
+        ctx.setLineDash([3 * dpr, 3 * dpr]);
+        ctx.beginPath();
+        ctx.moveTo(Math.max(0, Math.min(xFrom, xTouch)), y);
+        ctx.lineTo(xTouch, y);
+        ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillRect(bx, by, tw + pad * 2, badgeH);
-        ctx.strokeRect(bx, by, tw + pad * 2, badgeH);
-        ctx.fillStyle = '#FF5252';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(tag, bx + pad, yPoc);
+        ctx.lineWidth = 2 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(xTouch, y - 4 * dpr);
+        ctx.lineTo(xTouch, y + 4 * dpr);
+        ctx.stroke();
         ctx.restore();
     }
     drawLevelBadge(ctx, label, price, x, y, color, dpr) {

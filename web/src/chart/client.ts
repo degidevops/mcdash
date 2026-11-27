@@ -4,9 +4,13 @@ import type { ChartTpoData } from './tpo.js';
 
 export type ChartSource = 'main' | 'binance' | 'tv';
 export type OnBars = (bars: BarRaw[]) => void;
-export type OnTick = (price: number) => void;
+/** `wall` = waktu server (epoch detik) saat harga diterima. */
+export type OnTick = (price: number, wall: number) => void;
 export type OnStatus = (connected: boolean) => void;
-export type OnTpo = (data: ChartTpoData) => void;
+/** TPO di server berubah. */
+export type OnTpo = () => void;
+/** Ada data live yang mungkin terlewat (sambung ulang / klien tertinggal). */
+export type OnResync = () => void;
 /** Frame chart live dari sumber alternatif: (src, tf, full, bars) */
 export type OnChartFrame = (src: string, tf: number, full: boolean, bars: BarRaw[]) => void;
 
@@ -15,6 +19,7 @@ export interface ChartSrcInfo { primary: string; options: ChartSrcOption[] }
 
 export class ChartClient {
   private ws: WebSocket | null = null;
+  private opened = false;
   private tf = 60; // current timeframe in minutes
   private source: ChartSource = 'main';
   private onTpoCallback?: OnTpo;
@@ -26,6 +31,7 @@ export class ChartClient {
     private onStatus: OnStatus,
     onTpo?: OnTpo,
     onChart?: OnChartFrame,
+    private onResync?: OnResync,
   ) {
     this.onTpoCallback = onTpo;
     this.onChartCallback = onChart;
@@ -51,8 +57,8 @@ export class ChartClient {
     return data.map(r => ({ t: r[0], o: r[1], h: r[2], l: r[3], c: r[4], v: r[5] }));
   }
 
-  async fetchTpo(tag?: string): Promise<ChartTpoData> {
-    const url = tag ? `/api/chart-tpo?tag=${tag}` : '/api/chart-tpo';
+  async fetchTpo(tag: string, since?: number): Promise<ChartTpoData> {
+    const url = `/api/chart-tpo?tag=${tag}` + (since !== undefined ? `&since=${since}` : '');
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return await resp.json();
@@ -60,10 +66,14 @@ export class ChartClient {
 
   connect(): void {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/ws`);
+    const ws = new WebSocket(`${proto}//${location.host}/ws?chart=1`);
     this.ws = ws;
 
-    ws.onopen = () => this.onStatus(true);
+    ws.onopen = () => {
+      this.onStatus(true);
+      if (this.opened) this.onResync?.();
+      this.opened = true;
+    };
     ws.onclose = () => {
       this.onStatus(false);
       setTimeout(() => this.connect(), 3000);
@@ -74,17 +84,14 @@ export class ChartClient {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.k === 'tick' && typeof msg.p === 'number') {
-          this.onTick(msg.p);
+          this.onTick(msg.p, typeof msg.wall === 'number' ? msg.wall : 0);
         } else if (msg.k === 'chart' && typeof msg.src === 'string' && typeof msg.tf === 'number') {
           const bars: BarRaw[] = (Array.isArray(msg.bars) ? msg.bars : []).map((r: number[]) => ({ t: r[0], o: r[1], h: r[2], l: r[3], c: r[4], v: r[5] }));
           this.onChartCallback?.(msg.src, msg.tf, !!msg.full, bars);
-        } else if (msg.s || msg.k === 'meta') {
-          // Snapshot baru diterima dari engine -> perbarui TPO
-          if (this.onTpoCallback) {
-            this.fetchTpo().then(tpo => {
-              if (this.onTpoCallback) this.onTpoCallback(tpo);
-            }).catch(() => {});
-          }
+        } else if (msg.k === 'tpo') {
+          this.onTpoCallback?.();
+        } else if (msg.k === 'resync') {
+          this.onResync?.();
         }
       } catch { /* ignore */ }
     };

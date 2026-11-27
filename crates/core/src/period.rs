@@ -491,22 +491,41 @@ impl Period {
     }
 
     /// Ekspor representasi baris-baris TPO untuk rendering overlay di chart.
+    /// Baris histogram untuk chart overlay, DIRINGKAS: baris berurutan yang isinya identik (huruf dan
+    /// tanda POC/VA sama) digabung menjadi satu entri dengan `n` baris. Tanpa kehilangan informasi, tetapi
+    /// ukurannya sebanding dengan jumlah huruf, bukan dengan jumlah baris harga (broker MT5 dengan point
+    /// kecil bisa menghasilkan belasan ribu baris per periode).
     pub fn tpo_rows(&self) -> Vec<TpoRowSnap> {
         if !self.valid || self.cnt.is_empty() {
             return vec![];
         }
         const L: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        let mut out = Vec::with_capacity(self.n_bins as usize);
-        for i in 0..self.n_bins {
-            let row = self.min_bin + i;
-            let price = row as f64 * self.tick;
+        let n = self.n_bins;
+        // batas segmen (indeks relatif): awal/akhir tiap huruf + sekitar POC/VAH/VAL
+        let mut cuts: Vec<i64> = Vec::with_capacity(self.ra.len() * 2 + 8);
+        cuts.extend([0, n, self.poc_i, self.poc_i + 1, self.va_up, self.va_up + 1, self.va_dn, self.va_dn + 1]);
+        for (a, b) in self.ra.iter().zip(&self.rb) {
+            cuts.push(a - self.min_bin);
+            cuts.push(b - self.min_bin + 1);
+        }
+        cuts.retain(|c| *c >= 0 && *c <= n);
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut out = Vec::with_capacity(cuts.len());
+        for w in cuts.windows(2) {
+            let (i, len) = (w[0], w[1] - w[0]);
             let count = self.cnt[i as usize];
+            if count <= 0 {
+                continue; // celah harga yang tidak disentuh huruf mana pun
+            }
+            let row = self.min_bin + i;
             let letters: String = (0..self.ra.len())
                 .filter(|&k| self.ra[k] <= row && row <= self.rb[k])
                 .map(|k| L[k % L.len()] as char)
                 .collect();
             out.push(TpoRowSnap {
-                price,
+                price: row as f64 * self.tick,
+                n: len,
                 count,
                 letters,
                 is_poc: i == self.poc_i,
@@ -517,12 +536,25 @@ impl Period {
         }
         out
     }
+
+    /// Sidik isi profil (untuk cache baris di server & klien): berubah bila baris histogramnya berubah.
+    /// Dipotong 53 bit supaya aman sebagai `number` di JavaScript.
+    pub fn rows_sig(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.tick.to_bits(), self.min_bin, self.n_bins, self.poc_i, self.va_up, self.va_dn).hash(&mut h);
+        self.ra.hash(&mut h);
+        self.rb.hash(&mut h);
+        h.finish() >> 11
+    }
 }
 
-/// Data satu baris harga pada histogram TPO untuk chart overlay.
+/// Data satu segmen histogram TPO untuk chart overlay: `n` baris harga berurutan mulai dari `price`
+/// (pusat baris TERBAWAH) yang isinya identik.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct TpoRowSnap {
     pub price: f64,
+    pub n: i64,
     pub count: i64,
     pub letters: String,
     pub is_poc: bool,
@@ -655,5 +687,34 @@ mod tests {
             assert!(r.count > 0);
             assert!(!r.letters.is_empty());
         }
+    }
+
+    /// Ringkasan segmen harus persis sama dengan isi per baris bila dibuka kembali.
+    #[test]
+    fn tpo_rows_ringkas_tanpa_kehilangan_informasi() {
+        let mut p = Period::new(0, 100_000);
+        p.tick = 0.01; // baris sangat halus (broker MT5 3 digit)
+        for i in 0..60i64 {
+            let base = 100.0 + ((i * 37) % 23) as f64 * 0.7;
+            p.add_bar(i * 600, base, base + 1.3 + (i % 5) as f64, base - 0.4, 600, Some(base));
+        }
+        p.compute(70.0, 80, 0.001, VaMethod::TwoRows, VaBound::Center, PocRule::Atas, VaTieBreak::Up, VaStop::Floor);
+        let rows = p.tpo_rows();
+        assert!(rows.len() <= 2 * 60 + 8, "segmen {} harus sebanding jumlah huruf", rows.len());
+        let mut covered = 0;
+        for r in &rows {
+            for k in 0..r.n {
+                let i = (r.price / p.tick).round() as i64 + k - p.min_bin;
+                assert_eq!(r.count, p.cnt[i as usize]);
+                assert_eq!(r.count as usize, r.letters.len());
+                assert_eq!(r.is_poc, i == p.poc_i);
+                assert_eq!(r.is_vah, i == p.va_up);
+                assert_eq!(r.is_val, i == p.va_dn);
+                assert_eq!(r.in_va, i >= p.va_dn && i <= p.va_up);
+                covered += 1;
+            }
+        }
+        assert_eq!(covered, p.cnt.iter().filter(|c| **c > 0).count());
+        assert!(covered as usize > rows.len() * 5, "harus jauh lebih ringkas daripada per baris");
     }
 }

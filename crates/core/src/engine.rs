@@ -6,8 +6,12 @@ use crate::series::{Bars, Series};
 use crate::snapshot::*;
 use crate::util::{decimals_of, fmt_f, fmt_g, fmt_thousands0};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 
 pub const DAYS_ID: [&str; 7] = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
+
+/// Cache baris histogram per (tag profil, awal periode) -> (sidik, baris). Periode selesai hanya dihitung sekali.
+type RowsCache = HashMap<(String, i64), (u64, Arc<Vec<crate::period::TpoRowSnap>>)>;
 
 pub struct TpoEngine {
     pub symbol: String,
@@ -22,6 +26,7 @@ pub struct TpoEngine {
     pub price: f64,
     pub atr: f64,
     pub asof: i64,
+    rows_cache: Arc<Mutex<RowsCache>>,
 }
 
 impl TpoEngine {
@@ -43,7 +48,27 @@ impl TpoEngine {
             price: 0.0,
             atr: 0.0,
             asof: 0,
+            rows_cache: Default::default(),
         })
+    }
+
+    /// Salinan konfigurasi (tanpa hasil perhitungan) untuk dihitung di thread terpisah; cache baris dipakai bersama.
+    pub fn fresh(&self) -> TpoEngine {
+        TpoEngine {
+            symbol: self.symbol.clone(),
+            point: self.point,
+            tz: self.tz.clone(),
+            cal: self.cal.clone(),
+            cfgs: self.cfgs.clone(),
+            feed_tf: self.feed_tf.clone(),
+            atr_period: self.atr_period,
+            atr_feed_tf: self.atr_feed_tf,
+            profiles: vec![],
+            price: 0.0,
+            atr: 0.0,
+            asof: 0,
+            rows_cache: self.rows_cache.clone(),
+        }
     }
 
     /// Timeframe feed yang dibutuhkan, dari terbesar.
@@ -60,7 +85,45 @@ impl TpoEngine {
     }
 
     pub fn rebuild(&mut self, bars: &HashMap<i64, Bars>) -> Result<(), String> {
-        let series: BTreeMap<i64, Series> = bars.iter().filter(|(_, b)| !b.is_empty()).map(|(tf, b)| (*tf, Series::new(*tf, b))).collect();
+        let series = self.prepare_series(bars)?;
+        self.rebuild_series(&series)
+    }
+
+    /// Salin HANYA bar yang dipakai perhitungan: jendela `count` periode per profil (plus lookback tick otomatis),
+    /// serta ekor pendek untuk harga & ATR. Dengan begitu biaya hitung tidak ikut membesar saat history_bars besar.
+    pub fn prepare_series(&self, bars: &HashMap<i64, Bars>) -> Result<BTreeMap<i64, Series>, String> {
+        let present: BTreeMap<i64, &Bars> = bars.iter().filter(|(_, b)| !b.is_empty()).map(|(tf, b)| (*tf, b)).collect();
+        let finest = *present.keys().next().ok_or("tidak ada data bar")?;
+        let atr_tf = if present.contains_key(&self.atr_feed_tf) {
+            self.atr_feed_tf
+        } else if present.contains_key(&15) {
+            15
+        } else {
+            finest
+        };
+        let mut from: BTreeMap<i64, i64> = BTreeMap::new(); // tf -> waktu bar tertua yang dibutuhkan
+        let mut need_tail = |tf: i64, ts: i64| {
+            let e = from.entry(tf).or_insert(ts);
+            *e = (*e).min(ts);
+        };
+        for tf in [finest, atr_tf] {
+            let b = present[&tf];
+            if let Some((ts, _)) = b.iter().rev().take(self.atr_period + 2).last() {
+                need_tail(tf, *ts);
+            }
+        }
+        for (i, cfg) in self.cfgs.iter().enumerate() {
+            let tf = self.feed_tf[i];
+            let Some(b) = present.get(&tf) else { continue };
+            let pf = Profile::new(cfg.clone(), &self.tz, tf, self.point)?;
+            let (ps, lookback) = pf.window(*b.keys().next_back().unwrap(), tf);
+            let start = b.range(..ps).rev().take(lookback).last().map_or(ps, |(ts, _)| *ts);
+            need_tail(tf, start);
+        }
+        Ok(from.into_iter().map(|(tf, ts)| (tf, Series::from_iter(tf, present[&tf].range(ts..)))).collect())
+    }
+
+    pub fn rebuild_series(&mut self, series: &BTreeMap<i64, Series>) -> Result<(), String> {
         self.profiles.clear();
         for (i, cfg) in self.cfgs.iter().enumerate() {
             if let Some(ser) = series.get(&self.feed_tf[i]) {
@@ -70,7 +133,7 @@ impl TpoEngine {
             }
         }
         let fine = series.values().next().ok_or("tidak ada data bar")?; // timeframe terkecil
-        self.price = *fine.c.last().unwrap();
+        self.price = *fine.c.last().ok_or("tidak ada data bar")?;
         self.asof = *fine.t.last().unwrap();
         let rf = series.get(&self.atr_feed_tf).or_else(|| series.get(&15)).unwrap_or(fine);
         self.atr = rf.atr(self.atr_period);
@@ -249,16 +312,44 @@ impl TpoEngine {
     pub fn chart_tpo(&self) -> ChartTpoResponse {
         let mut profiles = BTreeMap::new();
         let mut naked = Vec::new();
+        let mut cache = self.rows_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut keep: RowsCache = HashMap::new();
 
-        for (tag, pf, _) in &self.profiles {
+        for (tag, pf, tf_min) in &self.profiles {
             let mut periods = Vec::new();
+            let all = pf
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (pf.name(i), p, false))
+                .chain(pf.cur.iter().map(|c| (format!("{tag}-now"), c, true)));
 
-            for (i, p) in pf.items.iter().enumerate() {
+            for (name, p, developing) in all {
                 if !p.valid {
                     continue;
                 }
+                let sig = p.rows_sig();
+                let key = (tag.clone(), p.start);
+                let rows = match cache.remove(&key) {
+                    Some((s, rows)) if s == sig => rows,
+                    _ => Arc::new(p.tpo_rows()),
+                };
+                keep.insert(key, (sig, rows.clone()));
+                let touch = |k: usize| p.touch[k].map(|(t, _)| t);
+                if !developing {
+                    for (k, kind) in KINDS.iter().enumerate() {
+                        if p.touch[k].is_none() {
+                            naked.push(ChartNakedLevel {
+                                name: format!("n{kind} {name}"),
+                                kind: kind.to_string(),
+                                price: p.level(k),
+                                start_time: p.start,
+                            });
+                        }
+                    }
+                }
                 periods.push(ChartTpoPeriod {
-                    name: pf.name(i),
+                    name,
                     start: p.start,
                     end: p.end,
                     tick: p.tick,
@@ -267,42 +358,13 @@ impl TpoEngine {
                     poc: p.poc,
                     vah: p.vah,
                     val: p.val,
-                    touched_poc: p.touch[0].is_some(),
-                    touched_vah: p.touch[1].is_some(),
-                    touched_val: p.touch[2].is_some(),
-                    rows: p.tpo_rows(),
+                    developing,
+                    touch_poc: touch(0),
+                    touch_vah: touch(1),
+                    touch_val: touch(2),
+                    sig,
+                    rows: Some(rows),
                 });
-
-                for (k, kind) in ["POC", "VAH", "VAL"].iter().enumerate() {
-                    if p.touch[k].is_none() {
-                        naked.push(ChartNakedLevel {
-                            name: format!("n{} {}", kind, pf.name(i)),
-                            kind: kind.to_string(),
-                            price: p.level(k),
-                            start_time: p.start,
-                        });
-                    }
-                }
-            }
-
-            if let Some(cur) = pf.cur.as_ref() {
-                if cur.valid {
-                    periods.push(ChartTpoPeriod {
-                        name: format!("{}-now", tag),
-                        start: cur.start,
-                        end: cur.end,
-                        tick: cur.tick,
-                        high: cur.d_high,
-                        low: cur.d_low,
-                        poc: cur.poc,
-                        vah: cur.vah,
-                        val: cur.val,
-                        touched_poc: cur.touch[0].is_some(),
-                        touched_vah: cur.touch[1].is_some(),
-                        touched_val: cur.touch[2].is_some(),
-                        rows: cur.tpo_rows(),
-                    });
-                }
             }
 
             profiles.insert(
@@ -310,10 +372,12 @@ impl TpoEngine {
                 ChartTpoProfile {
                     tag: tag.clone(),
                     mode: pf.cfg.mode.as_str().into(),
+                    tf_min: *tf_min,
                     periods,
                 },
             );
         }
+        *cache = keep; // periode yang sudah keluar jendela dibuang
 
         ChartTpoResponse {
             symbol: self.symbol.clone(),
@@ -336,10 +400,16 @@ pub struct ChartTpoPeriod {
     pub poc: f64,
     pub vah: f64,
     pub val: f64,
-    pub touched_poc: bool,
-    pub touched_vah: bool,
-    pub touched_val: bool,
-    pub rows: Vec<crate::period::TpoRowSnap>,
+    /// Periode berjalan (levelnya masih bergerak, belum bisa disebut naked).
+    pub developing: bool,
+    /// Waktu bar pertama yang menyentuh level (aturan touch_letters); None = masih naked.
+    pub touch_poc: Option<i64>,
+    pub touch_vah: Option<i64>,
+    pub touch_val: Option<i64>,
+    /// Sidik isi baris; klien memakai ulang baris cache selama sidiknya sama.
+    pub sig: u64,
+    /// None = tidak dikirim ulang (klien sudah punya, lihat `since` di /api/chart-tpo).
+    pub rows: Option<Arc<Vec<crate::period::TpoRowSnap>>>,
 }
 
 /// Kumpulan periode TPO untuk satu profil (mis. Sessional atau Daily).
@@ -347,6 +417,8 @@ pub struct ChartTpoPeriod {
 pub struct ChartTpoProfile {
     pub tag: String,
     pub mode: String,
+    /// Timeframe feed (menit) sumber perhitungan, termasuk waktu touch.
+    pub tf_min: i64,
     pub periods: Vec<ChartTpoPeriod>,
 }
 
@@ -366,6 +438,33 @@ pub struct ChartTpoResponse {
     pub point: f64,
     pub profiles: BTreeMap<String, ChartTpoProfile>,
     pub naked: Vec<ChartNakedLevel>,
+}
+
+impl ChartTpoResponse {
+    /// Salinan ringan untuk satu permintaan: saring per profil, dan bila `since` diisi, baris hanya disertakan
+    /// untuk periode berjalan serta periode yang mulai >= `since` (baris dibagi lewat Arc, tidak disalin).
+    pub fn view(&self, tag: Option<&str>, since: Option<i64>) -> ChartTpoResponse {
+        let profiles = self
+            .profiles
+            .iter()
+            .filter(|(k, _)| tag.map_or(true, |t| t == k.as_str()))
+            .map(|(k, pf)| {
+                let periods = pf
+                    .periods
+                    .iter()
+                    .map(|p| {
+                        let mut q = p.clone();
+                        if since.map_or(false, |s| !p.developing && p.start < s) {
+                            q.rows = None;
+                        }
+                        q
+                    })
+                    .collect();
+                (k.clone(), ChartTpoProfile { tag: pf.tag.clone(), mode: pf.mode.clone(), tf_min: pf.tf_min, periods })
+            })
+            .collect();
+        ChartTpoResponse { symbol: self.symbol.clone(), point: self.point, profiles, naked: self.naked.clone() }
+    }
 }
 
 // ---------------------------------------------------------------- teks (setara --text / --once)

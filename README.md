@@ -80,6 +80,9 @@ Level periode yang sudah selesai dianggap **tersentuh** hanya bila harga memuat 
 - **Binance**: satu koneksi combined stream memuat `@kline_<interval>` (bar) DAN `@aggTrade`/`@trade` — harga bergerak per **trade**, bukan menunggu update kline (1–2 dtk). Klien mengirim ping WS tiap 25 dtk; tanpa pesan/pong 75 dtk koneksi dianggap mati dan diisi ulang otomatis (sebelumnya 240 dtk).
 - **TradingView**: koneksi tanpa pesan apa pun 45 dtk dianggap mati (sebelumnya 60 dtk). Setelah reconnect feed hanya mengunduh jendela bar seluas selisih waktu putus (+margin), bukan seluruh riwayat — data kembali mengalir dalam ~1 dtk, bukan berputar mengunduh ribuan bar.
 - **MT5**: riwayat dikirim EA satu potongan per tick timer (v1.10), jadi kiriman live tidak terblokir selama riwayat panjang ditransfer — perbarui `MCDashBridge.mq5` di terminal agar manfaatnya penuh.
+- **History besar**: server hanya menulis bar yang berubah, perhitungan TPO berjalan di thread terpisah dan hanya memakai jendela bar yang dibutuhkan (`count` periode), sehingga `history_bars` besar tidak menahan data live.
+- **Halaman /chart**: bar live sumber utama didorong lewat WebSocket (`/ws?chart=1`); data TPO dikirim per profil aktif dengan baris histogram diringkas, dan hanya periode terbaru yang diunduh ulang (`/api/chart-tpo?tag=S&since=…`).
+- **nPOC / nVA**: level naked memanjang sampai tepi kanan; level yang sudah tersentuh (aturan `touch_letters`) berhenti di candle penyentuhnya. Tombol `nPOC` (N) dan `nVA` (A).
 - **TPO snapshot**: jeda minimum antar perhitungan bawaan 0,5 dtk (`--interval`, sebelumnya 1 dtk); di perangkat lambat mesin tetap menyesuaikan otomatis (4× durasi perhitungan).
 
 ### Binance
